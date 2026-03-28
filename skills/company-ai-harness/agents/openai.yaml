@@ -1,0 +1,4 @@
+interface:
+  display_name: "Company AI Harness"
+  short_description: "Spec-to-code workflow for company engineering delivery"
+  default_prompt: "Use $company-ai-harness to turn a requirement or issue URL into specs, implementation flow, review loops, and verification gates."

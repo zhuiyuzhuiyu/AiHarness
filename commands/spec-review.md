@@ -1,0 +1,22 @@
+# /spec-review
+
+## Purpose
+
+Run structured review on the current diff and write `review.md`.
+
+## Inputs
+
+- Current diff
+- `requirements.md`
+- `design.md`
+- `tasks.md`
+
+## Outputs
+
+- `specs/<initiative-slug>/<YYYY-MM-DD>-v1/review.md`
+
+## Rules
+
+- Focus on regressions, security, and test gaps
+- Prefer parallel review passes
+- Record severity and disposition for each finding
