@@ -40,3 +40,39 @@ AI Harness 的运行配置位于：
 `./commands/spec-verify` 会执行所有已启用的 `verify.commands`。
 
 如果任一命令返回非零退出码，对应步骤会返回失败状态。
+
+## 自动发现命令
+
+可以运行：
+
+```bash
+./commands/discover-commands
+./commands/discover-commands --apply
+```
+
+自动扫描当前仓库中的：
+
+- `package.json` 脚本
+- `pytest.ini` / `pyproject.toml` 等 pytest 配置
+- `playwright.config.*`
+
+`--apply` 会把发现到的命令直接写回 `.aiharness/config.json`。
+
+## Issue URL 读取
+
+当前优先支持 GitHub issue URL，依赖本机 `gh` 已登录。
+
+例如：
+
+```bash
+./commands/spec-intake --source "https://github.com/owner/repo/issues/123"
+```
+
+如果 URL 可读取，系统会自动把这些信息写入 `requirements.md`：
+
+- 标题
+- 正文
+- 状态
+- 标签
+- 负责人
+- 评论摘要

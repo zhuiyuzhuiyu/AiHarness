@@ -30,6 +30,7 @@
 ./commands/spec-design --slug refund-approval
 ./commands/spec-plan --slug refund-approval
 ./commands/spec-build --slug refund-approval
+./commands/discover-commands --apply
 ./hooks/post-edit/run
 ```
 
@@ -43,6 +44,17 @@
 
 - 在 `review.commands` 中启用 `npm run lint`
 - 在 `verify.commands` 中启用 `pytest` 或 `npx playwright test`
+- 也可以先运行 `./commands/discover-commands --apply` 自动发现并写入
+
+## Issue URL 输入
+
+`spec-intake` 支持直接读取 GitHub issue URL：
+
+```bash
+./commands/spec-intake --source "https://github.com/owner/repo/issues/123"
+```
+
+如果 URL 可读取，就会自动提取标题、正文、状态、标签和评论摘要，并写入 `requirements.md`。
 
 ## Codex 接入
 

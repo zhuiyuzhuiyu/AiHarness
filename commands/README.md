@@ -13,6 +13,7 @@
 - `commands/spec-review`
 - `commands/spec-verify`
 - `commands/spec-close`
+- `commands/discover-commands`
 
 所有命令包装脚本最终都会调用 `bin/aih`，再由 `scripts/harness.py` 执行。
 
@@ -42,4 +43,5 @@
 ./commands/spec-intake --title "Add refund approval flow" --source "JIRA-123"
 ./commands/spec-design --slug refund-approval
 ./commands/spec-plan --slug refund-approval
+./commands/discover-commands --apply
 ```

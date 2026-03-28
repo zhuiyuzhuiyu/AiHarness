@@ -136,6 +136,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
             },
         ]
     },
+    "intake": {
+        "github": {
+            "enabled": True,
+            "preferred_reader": "gh"
+        }
+    }
 }
 
 
@@ -181,6 +187,11 @@ def config() -> dict[str, Any]:
     return read_json(CONFIG_PATH)
 
 
+def save_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
 def language_instruction() -> str:
     return config().get("language", {}).get("instruction", DEFAULT_CONFIG["language"]["instruction"])
 
@@ -202,17 +213,22 @@ def load_template(name: str) -> str:
     return (TEMPLATES_DIR / name).read_text().rstrip() + "\n"
 
 
+def shell(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=cwd or ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def project_docs() -> list[str]:
     return [candidate for candidate in PROJECT_DOC_CANDIDATES if (ROOT / candidate).exists()]
 
 
 def git_changed_files() -> list[str]:
-    result = subprocess.run(
-        ["git", "-C", str(ROOT), "status", "--short"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = shell(["git", "-C", str(ROOT), "status", "--short"])
     changed: list[str] = []
     for line in result.stdout.splitlines():
         if not line.strip():
@@ -263,11 +279,95 @@ def format_frontmatter(title: str, source: str, docs: list[str]) -> str:
     return "\n".join(lines)
 
 
-def intake_content(title: str, source: str) -> str:
+def parse_github_issue_url(source: str) -> dict[str, str] | None:
+    pattern = re.compile(r"https://github\.com/([^/]+)/([^/]+)/issues/(\d+)")
+    match = pattern.search(source)
+    if not match:
+        return None
+    owner, repo, number = match.groups()
+    return {"owner": owner, "repo": repo, "number": number}
+
+
+def load_github_issue(source: str) -> dict[str, Any] | None:
+    parsed = parse_github_issue_url(source)
+    if not parsed:
+        return None
+    if not config().get("intake", {}).get("github", {}).get("enabled", True):
+        return None
+
+    result = shell(
+        [
+            "gh",
+            "issue",
+            "view",
+            parsed["number"],
+            "--repo",
+            f"{parsed['owner']}/{parsed['repo']}",
+            "--json",
+            "title,body,labels,assignees,comments,state,url",
+        ]
+    )
+    if result.returncode != 0:
+        return {
+            "type": "github-issue",
+            "url": source,
+            "error": result.stderr.strip() or "gh issue view failed",
+        }
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {
+            "type": "github-issue",
+            "url": source,
+            "error": "invalid gh output",
+        }
+
+    labels = [item.get("name", "") for item in payload.get("labels", []) if item.get("name")]
+    assignees = [item.get("login", "") for item in payload.get("assignees", []) if item.get("login")]
+    comments = payload.get("comments", [])[:5]
+    return {
+        "type": "github-issue",
+        "url": payload.get("url", source),
+        "title": payload.get("title", ""),
+        "body": payload.get("body", "").strip(),
+        "state": payload.get("state", ""),
+        "labels": labels,
+        "assignees": assignees,
+        "comments": [
+            {
+                "author": item.get("author", {}).get("login", "unknown"),
+                "body": item.get("body", "").strip(),
+            }
+            for item in comments
+        ],
+    }
+
+
+def intake_content(title: str, source: str, source_details: dict[str, Any] | None = None) -> str:
     frontmatter = format_frontmatter(title, source, project_docs())
     body = load_template("requirements.template.md")
     body += f"\n## 语言约束\n\n- {language_instruction()}\n"
     body += f"\n## 备注\n\n- 需求标题：{title}\n- 需求来源：{source}\n"
+    if source_details:
+        body += "\n## 来源解析\n\n"
+        body += f"- 类型：{source_details.get('type', 'unknown')}\n"
+        body += f"- URL：{source_details.get('url', source)}\n"
+        if source_details.get("state"):
+            body += f"- 状态：{source_details['state']}\n"
+        if source_details.get("labels"):
+            body += f"- 标签：{', '.join(source_details['labels'])}\n"
+        if source_details.get("assignees"):
+            body += f"- 负责人：{', '.join(source_details['assignees'])}\n"
+        if source_details.get("error"):
+            body += f"- 读取错误：{source_details['error']}\n"
+        if source_details.get("body"):
+            body += f"\n## 来源正文\n\n{source_details['body']}\n"
+        if source_details.get("comments"):
+            body += "\n## 来源评论摘要\n\n"
+            for comment in source_details["comments"]:
+                if not comment["body"]:
+                    continue
+                body += f"- `{comment['author']}`: {comment['body'][:300]}\n"
     return frontmatter + body
 
 
@@ -305,6 +405,80 @@ def enabled_command_specs(section: str) -> list[dict[str, Any]]:
     return [entry for entry in command_specs(section) if entry.get("enabled")]
 
 
+def candidate_command(name: str, command: str, description: str, section: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "enabled": False,
+        "command": command,
+        "description": description,
+        "section": section,
+    }
+
+
+def detect_npm_commands() -> list[dict[str, Any]]:
+    package_json = ROOT / "package.json"
+    if not package_json.exists():
+        return []
+    payload = json.loads(package_json.read_text())
+    scripts = payload.get("scripts", {})
+    detected: list[dict[str, Any]] = []
+    if "lint" in scripts:
+        detected.append(candidate_command("lint", "npm run lint", "JavaScript/TypeScript lint 检查。", "review"))
+    if "typecheck" in scripts:
+        detected.append(candidate_command("typecheck", "npm run typecheck", "TypeScript 类型检查。", "review"))
+    elif "tsc" in scripts:
+        detected.append(candidate_command("tsc", "npm run tsc", "TypeScript 编译检查。", "review"))
+    if "test" in scripts:
+        detected.append(candidate_command("npm-test", "npm test -- --runInBand", "Node 测试命令。", "verify"))
+    if "test:unit" in scripts:
+        detected.append(candidate_command("unit", "npm run test:unit", "项目定义的单元测试。", "verify"))
+    if "test:e2e" in scripts:
+        detected.append(candidate_command("e2e", "npm run test:e2e", "项目定义的端到端测试。", "verify"))
+    if "playwright" in scripts:
+        detected.append(candidate_command("playwright", "npm run playwright", "项目定义的 Playwright 测试。", "verify"))
+    return detected
+
+
+def detect_pytest_commands() -> list[dict[str, Any]]:
+    files = ["pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml"]
+    if not any((ROOT / item).exists() for item in files):
+        return []
+    return [
+        candidate_command("pytest-quick", "pytest -q", "Python 快速回归测试。", "review"),
+        candidate_command("pytest", "pytest", "Python 测试。", "verify"),
+    ]
+
+
+def detect_playwright_commands() -> list[dict[str, Any]]:
+    candidates = [
+        "playwright.config.ts",
+        "playwright.config.js",
+        "playwright.config.mjs",
+        "playwright.config.cjs",
+    ]
+    if any((ROOT / item).exists() for item in candidates):
+        return [candidate_command("playwright", "npx playwright test", "Playwright 端到端测试。", "verify")]
+    return []
+
+
+def discovered_commands() -> dict[str, list[dict[str, Any]]]:
+    review: list[dict[str, Any]] = []
+    verify: list[dict[str, Any]] = []
+    for item in detect_npm_commands() + detect_pytest_commands() + detect_playwright_commands():
+        target = review if item["section"] == "review" else verify
+        trimmed = {k: v for k, v in item.items() if k != "section"}
+        if not any(existing["command"] == trimmed["command"] for existing in target):
+            target.append(trimmed)
+    return {"review": review, "verify": verify}
+
+
+def configured_or_discovered_commands(section: str) -> list[dict[str, Any]]:
+    configured = enabled_command_specs(section)
+    if configured:
+        return configured
+    return discovered_commands().get(section, [])
+
+
 def run_shell_command(command: str) -> dict[str, Any]:
     result = subprocess.run(
         command,
@@ -325,10 +499,11 @@ def run_shell_command(command: str) -> dict[str, Any]:
 
 def execute_configured_commands(section: str) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    for entry in enabled_command_specs(section):
+    for entry in configured_or_discovered_commands(section):
         outcome = run_shell_command(entry["command"])
         outcome["name"] = entry.get("name", entry["command"])
         outcome["description"] = entry.get("description", "")
+        outcome["auto_discovered"] = not entry.get("enabled", False)
         results.append(outcome)
     return results
 
@@ -349,10 +524,11 @@ def review_content(spec: SpecPaths, findings: dict[str, list[str]], command_resu
         "",
     ]
     if not command_results:
-        lines.append("- 当前未启用真实 review 命令，请在 `.aiharness/config.json` 中开启。")
+        lines.append("- 当前未启用也未发现可执行的 review 命令。")
     else:
         for result in command_results:
-            lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`)")
+            mode = "自动发现" if result.get("auto_discovered") else "配置启用"
+            lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`，{mode})")
     lines.extend(["", "## 风险提示", ""])
     if not findings:
         lines.append("- 当前没有命中文件级风险规则。")
@@ -375,10 +551,11 @@ def test_report_content(changed_files: list[str], command_results: list[dict[str
         "",
     ]
     if not command_results:
-        lines.append("- 当前未启用真实 verify 命令，请在 `.aiharness/config.json` 中开启。")
+        lines.append("- 当前未启用也未发现可执行的 verify 命令。")
     else:
         for result in command_results:
-            lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`)")
+            mode = "自动发现" if result.get("auto_discovered") else "配置启用"
+            lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`，{mode})")
     lines.extend(["", "## 变更文件", ""])
     if changed_files:
         lines.extend(f"- `{path}`" for path in changed_files)
@@ -416,9 +593,14 @@ def build_stamp(explicit_date: str | None, iteration: str) -> str:
 
 
 def cmd_spec_intake(args: argparse.Namespace) -> int:
-    slug = slugify(args.slug or args.title)
+    source_details = load_github_issue(args.source)
+    title = source_details.get("title") if source_details and source_details.get("title") else args.title
+    if not title:
+        print("missing title: provide --title or a readable GitHub issue URL in --source", file=sys.stderr)
+        return 1
+    slug = slugify(args.slug or title)
     spec = spec_dir(slug, build_stamp(args.date, args.iteration))
-    write_text(spec.requirements, intake_content(args.title, args.source), force=args.force)
+    write_text(spec.requirements, intake_content(title, args.source, source_details), force=args.force)
     print_json(
         {
             "command": "spec-intake",
@@ -426,6 +608,8 @@ def cmd_spec_intake(args: argparse.Namespace) -> int:
             "requirements": str(spec.requirements.relative_to(ROOT)),
             "project_docs": project_docs(),
             "language": config().get("language", {}).get("default", "zh-CN"),
+            "resolved_title": title,
+            "source_details": source_details or {},
         }
     )
     return 0
@@ -559,6 +743,7 @@ def cmd_hook_pre_verify(_: argparse.Namespace) -> int:
         if any(part in path.lower() for path in changed for part in ("ui", "page", "component", "frontend"))
         else [],
         "configured_commands": enabled_command_specs("verify"),
+        "discovered_commands": discovered_commands().get("verify", []),
     }
     print_json({"hook": "pre-verify", "changed_files": changed, "verification_plan": verification_plan})
     return 0
@@ -582,12 +767,30 @@ def cmd_show_config(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_discover_commands(args: argparse.Namespace) -> int:
+    discovered = discovered_commands()
+    if args.apply:
+        current = config()
+        current.setdefault("review", {})["commands"] = discovered["review"]
+        current.setdefault("verify", {})["commands"] = discovered["verify"]
+        save_json(CONFIG_PATH, current)
+    print_json(
+        {
+            "command": "discover-commands",
+            "applied": args.apply,
+            "discovered": discovered,
+            "config_path": str(CONFIG_PATH.relative_to(ROOT)),
+        }
+    )
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="AI Harness command and hook runner")
     sub = root.add_subparsers(dest="command", required=True)
 
     intake = sub.add_parser("spec-intake", help="Create requirements.md")
-    intake.add_argument("--title", required=True)
+    intake.add_argument("--title")
     intake.add_argument("--source", default="manual")
     intake.add_argument("--slug")
     intake.add_argument("--date")
@@ -655,6 +858,10 @@ def parser() -> argparse.ArgumentParser:
 
     show_config = sub.add_parser("show-config", help="Show the active harness config")
     show_config.set_defaults(func=cmd_show_config)
+
+    discover = sub.add_parser("discover-commands", help="Discover review and verify commands from the current repo")
+    discover.add_argument("--apply", action="store_true")
+    discover.set_defaults(func=cmd_discover_commands)
 
     return root
 

@@ -10,6 +10,8 @@ Turn a user request or issue URL into `requirements.md`.
 - Jira, Linear, or GitHub issue URL
 - Existing project docs and code
 
+如果 `source` 是 GitHub issue URL，可以不传 `title`，系统会自动读取 issue 标题和正文。
+
 ## Required Context
 
 - `.docs/ARCHITECTURE.md`
@@ -27,3 +29,4 @@ Turn a user request or issue URL into `requirements.md`.
 - Record acceptance criteria
 - Note assumptions and open questions
 - Mark security or approval-sensitive items
+- 如果 `source` 是 GitHub issue URL，自动提取标题、正文、状态、标签和评论摘要
