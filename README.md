@@ -26,14 +26,9 @@
 示例：
 
 ```bash
-./commands/spec-intake --title "Add refund approval flow" --source "JIRA-123"
-./commands/spec-design --slug refund-approval
-./commands/spec-plan --slug refund-approval
-./commands/spec-build --slug refund-approval
-./commands/discover-commands --apply
-./commands/spec-team --slug refund-approval
-./commands/spec-run-team --slug refund-approval
-./hooks/post-edit/run
+./commands/spec-start --title "Add refund approval flow" --source "JIRA-123"
+./commands/spec-execute --slug refund-approval
+./commands/spec-finish --slug refund-approval
 ```
 
 ## 配置
@@ -53,7 +48,7 @@
 `spec-intake` 支持直接读取 GitHub issue URL：
 
 ```bash
-./commands/spec-intake --source "https://github.com/owner/repo/issues/123"
+./commands/spec-start --source "https://github.com/owner/repo/issues/123"
 ```
 
 如果 URL 可读取，就会自动提取标题、正文、状态、标签和评论摘要，并写入 `requirements.md`。
@@ -63,7 +58,7 @@
 复杂需求可以通过 `spec-team` 进入多 agent 编排模式：
 
 ```bash
-./commands/spec-team --slug refund-approval
+./commands/spec-execute --slug refund-approval --team
 ```
 
 当前版本会根据 spec、风险和任务数生成 team 计划，并把每个 agent 的执行说明写入 `agent-results/`。
@@ -71,8 +66,8 @@
 如果要继续到 provider 选择和执行阶段，可以运行：
 
 ```bash
-./commands/spec-run-team --slug refund-approval
-./commands/spec-run-team --slug refund-approval --execute
+./commands/spec-execute --slug refund-approval --team
+./commands/spec-execute --slug refund-approval --team --execute-team
 ```
 
 当前版本会先做 provider 健康检查，不可用或未认证的 provider 会自动跳过。

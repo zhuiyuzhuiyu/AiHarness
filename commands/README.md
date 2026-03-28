@@ -16,18 +16,29 @@
 - `commands/discover-commands`
 - `commands/spec-team`
 - `commands/spec-run-team`
+- `commands/spec-start`
+- `commands/spec-execute`
+- `commands/spec-finish`
 
 所有命令包装脚本最终都会调用 `bin/aih`，再由 `scripts/harness.py` 执行。
 
 推荐命令集合：
 
-- `spec-intake.md`
-- `spec-design.md`
-- `spec-plan.md`
-- `spec-build.md`
-- `spec-review.md`
-- `spec-verify.md`
-- `spec-close.md`
+- `spec-start`
+- `spec-execute`
+- `spec-finish`
+
+底层调试命令：
+
+- `spec-intake`
+- `spec-design`
+- `spec-plan`
+- `spec-build`
+- `spec-review`
+- `spec-verify`
+- `spec-close`
+- `spec-team`
+- `spec-run-team`
 
 每个命令应说明：
 
@@ -42,10 +53,7 @@
 ## 示例
 
 ```bash
-./commands/spec-intake --title "Add refund approval flow" --source "JIRA-123"
-./commands/spec-design --slug refund-approval
-./commands/spec-plan --slug refund-approval
-./commands/discover-commands --apply
-./commands/spec-team --slug refund-approval
-./commands/spec-run-team --slug refund-approval
+./commands/spec-start --title "Add refund approval flow" --source "JIRA-123"
+./commands/spec-execute --slug refund-approval
+./commands/spec-finish --slug refund-approval
 ```

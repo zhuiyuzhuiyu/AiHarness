@@ -1022,6 +1022,13 @@ def build_stamp(explicit_date: str | None, iteration: str) -> str:
     return f"{base}-{iteration}"
 
 
+def run_or_fail(func, args: argparse.Namespace) -> dict[str, Any]:
+    code = func(args)
+    if code not in (0, 2):
+        raise RuntimeError(f"{func.__name__} failed with exit code {code}")
+    return {"step": func.__name__, "exit_code": code}
+
+
 def cmd_spec_intake(args: argparse.Namespace) -> int:
     source_details = load_github_issue(args.source)
     title = source_details.get("title") if source_details and source_details.get("title") else args.title
@@ -1284,6 +1291,103 @@ def cmd_spec_run_team(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_spec_start(args: argparse.Namespace) -> int:
+    source_details = load_github_issue(args.source)
+    title = source_details.get("title") if source_details and source_details.get("title") else args.title
+    if not title:
+        print("missing title: provide --title or a readable GitHub issue URL in --source", file=sys.stderr)
+        return 1
+
+    slug = slugify(args.slug or title)
+    stamp = build_stamp(args.date, args.iteration)
+    common = argparse.Namespace(slug=slug, date=args.date, iteration=args.iteration, force=args.force)
+    intake_args = argparse.Namespace(
+        title=title,
+        source=args.source,
+        slug=slug,
+        date=args.date,
+        iteration=args.iteration,
+        force=args.force,
+    )
+
+    steps = [
+        run_or_fail(cmd_spec_intake, intake_args),
+        run_or_fail(cmd_spec_design, common),
+        run_or_fail(cmd_spec_plan, common),
+        run_or_fail(cmd_discover_commands, argparse.Namespace(apply=True)),
+    ]
+
+    team_exit = cmd_spec_team(common)
+    steps.append({"step": "cmd_spec_team", "exit_code": team_exit})
+
+    print_json(
+        {
+            "command": "spec-start",
+            "slug": slug,
+            "stamp": stamp,
+            "steps": steps,
+        }
+    )
+    return 0
+
+
+def cmd_spec_execute(args: argparse.Namespace) -> int:
+    common = argparse.Namespace(slug=args.slug, date=args.date, iteration=args.iteration, force=True)
+    steps = [run_or_fail(cmd_spec_build, common)]
+
+    spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
+    signals = team_signals(spec, git_changed_files() or git_diff_name_only())
+    should_run_team = args.team or signals["should_enable_team"]
+
+    if should_run_team:
+        team_exit = cmd_spec_team(common)
+        steps.append({"step": "cmd_spec_team", "exit_code": team_exit})
+        run_team_exit = cmd_spec_run_team(
+            argparse.Namespace(
+                slug=args.slug,
+                date=args.date,
+                iteration=args.iteration,
+                execute=args.execute_team,
+            )
+        )
+        steps.append({"step": "cmd_spec_run_team", "exit_code": run_team_exit})
+
+    post_edit_exit = cmd_hook_post_edit(argparse.Namespace())
+    steps.append({"step": "cmd_hook_post_edit", "exit_code": post_edit_exit})
+
+    review_exit = cmd_spec_review(common)
+    verify_exit = cmd_spec_verify(common)
+    steps.append({"step": "cmd_spec_review", "exit_code": review_exit})
+    steps.append({"step": "cmd_spec_verify", "exit_code": verify_exit})
+
+    print_json(
+        {
+            "command": "spec-execute",
+            "slug": args.slug,
+            "team_used": should_run_team,
+            "steps": steps,
+        }
+    )
+    return 1 if review_exit == 1 or verify_exit == 1 else 0
+
+
+def cmd_spec_finish(args: argparse.Namespace) -> int:
+    common = argparse.Namespace(slug=args.slug, date=args.date, iteration=args.iteration)
+    pre_close_exit = cmd_hook_pre_close(common)
+    close_exit = cmd_spec_close(common)
+    print_json(
+        {
+            "command": "spec-finish",
+            "slug": args.slug,
+            "steps": [
+                {"step": "cmd_hook_pre_close", "exit_code": pre_close_exit},
+                {"step": "cmd_spec_close", "exit_code": close_exit},
+            ],
+        }
+    )
+    return 0 if close_exit == 0 else close_exit
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="AI Harness command and hook runner")
     sub = root.add_subparsers(dest="command", required=True)
@@ -1375,6 +1479,30 @@ def parser() -> argparse.ArgumentParser:
     run_team.add_argument("--iteration", default="v1")
     run_team.add_argument("--execute", action="store_true")
     run_team.set_defaults(func=cmd_spec_run_team)
+
+    start = sub.add_parser("spec-start", help="Aggregate intake, design, plan, discovery, and optional team setup")
+    start.add_argument("--title")
+    start.add_argument("--source", default="manual")
+    start.add_argument("--slug")
+    start.add_argument("--date")
+    start.add_argument("--iteration", default="v1")
+    start.add_argument("--force", action="store_true")
+    start.set_defaults(func=cmd_spec_start)
+
+    execute = sub.add_parser("spec-execute", help="Aggregate build, team planning, review, and verify")
+    execute.add_argument("--slug", required=True)
+    execute.add_argument("--date")
+    execute.add_argument("--iteration", default="v1")
+    execute.add_argument("--force", action="store_true")
+    execute.add_argument("--team", action="store_true")
+    execute.add_argument("--execute-team", action="store_true")
+    execute.set_defaults(func=cmd_spec_execute)
+
+    finish = sub.add_parser("spec-finish", help="Aggregate pre-close and close")
+    finish.add_argument("--slug", required=True)
+    finish.add_argument("--date")
+    finish.add_argument("--iteration", default="v1")
+    finish.set_defaults(func=cmd_spec_finish)
 
     return root
 
