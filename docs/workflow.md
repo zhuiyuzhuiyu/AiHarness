@@ -1,23 +1,23 @@
-# AI Harness Workflow
+# AI Harness 工作流
 
-This repository stores reusable Codex skills, templates, and workflow documents for company engineering delivery.
+这个仓库存放公司工程交付所需的可复用 Codex skill、模板和工作流文档。
 
-Primary skill:
+主 skill：
 
 - `skills/company-ai-harness`
 
-Primary output convention:
+标准输出目录：
 
 - `specs/<initiative-slug>/<YYYY-MM-DD>-<iteration>/`
 
-Recommended operating flow:
+推荐执行流程：
 
-1. Build `requirements.md`
-2. Build `design.md`
-3. Build `tasks.md`
-4. Implement
-5. Review
-6. Fix
-7. Verify
-8. Update docs
-9. Handoff
+1. 生成 `requirements.md`
+2. 生成 `design.md`
+3. 生成 `tasks.md`
+4. 实施开发
+5. 进行 review
+6. 修复问题
+7. 执行验证
+8. 更新文档
+9. 输出交付说明

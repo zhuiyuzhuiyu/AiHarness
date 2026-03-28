@@ -1,12 +1,12 @@
-# Commands And Hooks
+# Commands 与 Hooks
 
-## Purpose
+## 目的
 
-This document explains the difference between explicit workflow entrypoints and automatic guardrails.
+这份文档解释显式工作流入口与自动门禁之间的区别。
 
 ## Commands
 
-Commands are user-invoked actions. They are the operator interface for starting a stage in the workflow.
+Commands 是用户主动触发的动作，用来启动工作流中的某个阶段。
 
 Recommended lifecycle:
 
@@ -18,11 +18,11 @@ Recommended lifecycle:
 6. `/spec-verify`
 7. `/spec-close`
 
-In this repository, those commands are implemented as executable wrappers under `commands/` and all route through `bin/aih`.
+在这个仓库里，这些命令通过 `commands/` 下的可执行包装脚本实现，并统一转发给 `bin/aih`。
 
 ## Hooks
 
-Hooks run automatically at lifecycle checkpoints.
+Hooks 会在生命周期检查点自动运行。
 
 Recommended checkpoints:
 
@@ -32,12 +32,12 @@ Recommended checkpoints:
 4. `pre-verify`
 5. `pre-close`
 
-In this repository, each hook checkpoint has a `run` wrapper inside its folder. A scheduler, slash-command runner, or external orchestrator can invoke those wrappers directly.
+在这个仓库里，每个 hook 检查点目录下都有一个 `run` 包装脚本。调度器、slash command 运行器或外部 orchestrator 可以直接调用它们。
 
-## Design Rule
+## 设计原则
 
-Use commands to start work.
+用 commands 启动工作。
 
-Use hooks to enforce process quality and safety.
+用 hooks 保障流程质量与安全。
 
-Do not use hooks for hidden implementation changes.
+不要把 hooks 用于隐藏式代码修改。

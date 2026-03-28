@@ -1,17 +1,17 @@
-# Design
+# 设计文档
 
-## Current State
+## 当前状态
 
-## Proposed Approach
+## 方案概述
 
-## Files And Modules
+## 涉及文件与模块
 
-## Data And Control Flow
+## 数据流与控制流
 
-## Security Considerations
+## 安全考虑
 
-## Failure Modes
+## 失败场景
 
-## Test Strategy
+## 测试策略
 
-## Rollback Plan
+## 回滚方案

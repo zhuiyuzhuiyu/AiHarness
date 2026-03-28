@@ -1,19 +1,19 @@
-# Requirements
+# 需求文档
 
-## Source
+## 来源
 
-## Business Goal
+## 业务目标
 
-## User Story
+## 用户故事
 
-## In Scope
+## 范围内事项
 
-## Out of Scope
+## 非目标
 
-## Constraints
+## 约束条件
 
-## Security And Compliance
+## 安全与合规
 
-## Acceptance Criteria
+## 验收标准
 
-## Open Questions
+## 待确认问题

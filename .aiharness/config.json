@@ -1,0 +1,51 @@
+{
+  "language": {
+    "default": "zh-CN",
+    "fallback": "zh-CN",
+    "instruction": "默认使用中文编写 skill 描述、命令说明、测试报告、review 结论和对用户的回答，除非用户明确要求其他语言。"
+  },
+  "review": {
+    "commands": [
+      {
+        "name": "eslint",
+        "enabled": false,
+        "command": "npm run lint",
+        "description": "代码风格和静态检查。"
+      },
+      {
+        "name": "tsc",
+        "enabled": false,
+        "command": "npm run typecheck",
+        "description": "TypeScript 类型检查。"
+      },
+      {
+        "name": "pytest",
+        "enabled": false,
+        "command": "pytest -q",
+        "description": "Python 快速回归检查。"
+      }
+    ]
+  },
+  "verify": {
+    "commands": [
+      {
+        "name": "jest",
+        "enabled": false,
+        "command": "npm test -- --runInBand",
+        "description": "Jest 单元测试。"
+      },
+      {
+        "name": "pytest",
+        "enabled": false,
+        "command": "pytest",
+        "description": "Python 测试。"
+      },
+      {
+        "name": "playwright",
+        "enabled": false,
+        "command": "npx playwright test",
+        "description": "Playwright 端到端测试。"
+      }
+    ]
+  }
+}

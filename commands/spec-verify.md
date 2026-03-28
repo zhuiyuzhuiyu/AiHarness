@@ -4,6 +4,8 @@
 
 Run validation and record results in `test-report.md`.
 
+默认使用中文输出测试结果。
+
 ## Inputs
 
 - Current code changes
@@ -18,3 +20,4 @@ Run validation and record results in `test-report.md`.
 - Run targeted tests before broad suites
 - Include reproduction notes for failures
 - Use browser-driven checks only when needed
+- Execute real commands from `.aiharness/config.json` when enabled

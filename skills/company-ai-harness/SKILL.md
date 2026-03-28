@@ -9,6 +9,10 @@ description: Use when building or running a company engineering harness that tur
 
 Use this skill to run a disciplined engineering workflow for feature delivery. It standardizes requirement intake, design generation, task decomposition, implementation, review, verification, and documentation updates.
 
+默认语言约束：
+
+- 除非用户明确要求其他语言，所有 skill 描述、执行说明、spec 文档、review 结论、测试报告和对用户的回答都使用中文。
+
 Default to a mixed orchestration model:
 
 1. `Sequential` for the main pipeline.
@@ -121,6 +125,19 @@ Suggested model roles:
 - Tool-using coding agent for implementation and test execution
 
 Treat model names as configurable. Prefer capabilities over hard-coding a vendor unless the user explicitly requires one.
+
+真实 review 和 verify 命令不应写死在 skill 里。优先从仓库配置中读取，例如 `.aiharness/config.json` 中的：
+
+- `review.commands`
+- `verify.commands`
+
+典型命令包括：
+
+- `jest`
+- `pytest`
+- `playwright`
+- `lint`
+- `typecheck`
 
 ## Review And Fix Loop
 

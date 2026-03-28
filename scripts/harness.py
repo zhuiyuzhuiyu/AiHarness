@@ -9,12 +9,13 @@ import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = ROOT / "templates"
 SPECS_DIR = ROOT / "specs"
+CONFIG_PATH = ROOT / ".aiharness" / "config.json"
 
 PROJECT_DOC_CANDIDATES = [
     ".docs/ARCHITECTURE.md",
@@ -103,6 +104,41 @@ DOC_UPDATE_HINTS = {
 }
 
 
+DEFAULT_CONFIG: dict[str, Any] = {
+    "language": {
+        "default": "zh-CN",
+        "fallback": "zh-CN",
+        "instruction": "默认使用中文编写 skill 描述、命令说明、测试报告、review 结论和对用户的回答，除非用户明确要求其他语言。",
+    },
+    "review": {
+        "commands": [
+            {
+                "name": "example-review",
+                "enabled": False,
+                "command": "npm run lint",
+                "description": "示例 review 命令。按项目替换成真实 lint/typecheck/review 命令。",
+            }
+        ]
+    },
+    "verify": {
+        "commands": [
+            {
+                "name": "example-unit",
+                "enabled": False,
+                "command": "npm test",
+                "description": "示例单元测试命令。按项目替换成真实 jest/pytest 命令。",
+            },
+            {
+                "name": "example-e2e",
+                "enabled": False,
+                "command": "npx playwright test",
+                "description": "示例 e2e 命令。按项目替换成真实 Playwright 命令。",
+            },
+        ]
+    },
+}
+
+
 @dataclass(frozen=True)
 class SpecPaths:
     root: Path
@@ -134,8 +170,19 @@ def spec_dir(slug: str, stamp: str) -> SpecPaths:
     )
 
 
-def read_text(path: Path) -> str:
-    return path.read_text() if path.exists() else ""
+def read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return json.loads(json.dumps(DEFAULT_CONFIG))
+    with path.open() as f:
+        return json.load(f)
+
+
+def config() -> dict[str, Any]:
+    return read_json(CONFIG_PATH)
+
+
+def language_instruction() -> str:
+    return config().get("language", {}).get("instruction", DEFAULT_CONFIG["language"]["instruction"])
 
 
 def write_text(path: Path, content: str, force: bool = False) -> None:
@@ -206,101 +253,161 @@ def format_frontmatter(title: str, source: str, docs: list[str]) -> str:
         lines.extend(f"  - {entry}" for entry in docs)
     else:
         lines.append("  - none-found")
-    lines.append("---\n")
+    lines.extend(
+        [
+            "language:",
+            f"  - {config().get('language', {}).get('default', 'zh-CN')}",
+            "---\n",
+        ]
+    )
     return "\n".join(lines)
 
 
 def intake_content(title: str, source: str) -> str:
     frontmatter = format_frontmatter(title, source, project_docs())
     body = load_template("requirements.template.md")
-    body += f"\n## Notes\n\n- Requirement title: {title}\n- Requirement source: {source}\n"
+    body += f"\n## 语言约束\n\n- {language_instruction()}\n"
+    body += f"\n## 备注\n\n- 需求标题：{title}\n- 需求来源：{source}\n"
     return frontmatter + body
 
 
 def design_content(spec: SpecPaths) -> str:
-    frontmatter = format_frontmatter("Design", str(spec.requirements.relative_to(ROOT)), project_docs())
+    frontmatter = format_frontmatter("设计", str(spec.requirements.relative_to(ROOT)), project_docs())
     body = load_template("design.template.md")
     body += (
-        "\n## Inputs\n\n"
-        f"- Requirements: `{spec.requirements.relative_to(ROOT)}`\n"
-        f"- Project docs loaded: {', '.join(project_docs()) or 'none-found'}\n"
+        "\n## 输入\n\n"
+        f"- 需求文档：`{spec.requirements.relative_to(ROOT)}`\n"
+        f"- 已加载项目文档：{', '.join(project_docs()) or 'none-found'}\n"
+        f"- 语言约束：{language_instruction()}\n"
     )
     return frontmatter + body
 
 
 def tasks_content(spec: SpecPaths) -> str:
-    frontmatter = format_frontmatter("Tasks", str(spec.design.relative_to(ROOT)), project_docs())
+    frontmatter = format_frontmatter("任务拆解", str(spec.design.relative_to(ROOT)), project_docs())
     body = load_template("tasks.template.md")
     body += (
-        "\n## Suggested Execution Order\n\n"
-        "1. Implement the smallest reviewable slice.\n"
-        "2. Run targeted validation.\n"
-        "3. Send the diff through review.\n"
-        "4. Fix accepted findings.\n"
+        "\n## 建议执行顺序\n\n"
+        "1. 先做最小可 review 的切片。\n"
+        "2. 先跑最小验证，再扩大测试范围。\n"
+        "3. review 后修复确认问题。\n"
+        "4. 收尾时补文档和交付记录。\n"
     )
     return frontmatter + body
 
 
-def review_content(spec: SpecPaths, findings: dict[str, list[str]]) -> str:
+def command_specs(section: str) -> list[dict[str, Any]]:
+    entries = config().get(section, {}).get("commands", [])
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def enabled_command_specs(section: str) -> list[dict[str, Any]]:
+    return [entry for entry in command_specs(section) if entry.get("enabled")]
+
+
+def run_shell_command(command: str) -> dict[str, Any]:
+    result = subprocess.run(
+        command,
+        shell=True,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {
+        "command": command,
+        "returncode": result.returncode,
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+        "status": "passed" if result.returncode == 0 else "failed",
+    }
+
+
+def execute_configured_commands(section: str) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for entry in enabled_command_specs(section):
+        outcome = run_shell_command(entry["command"])
+        outcome["name"] = entry.get("name", entry["command"])
+        outcome["description"] = entry.get("description", "")
+        results.append(outcome)
+    return results
+
+
+def review_content(spec: SpecPaths, findings: dict[str, list[str]], command_results: list[dict[str, Any]]) -> str:
     lines = [
         "# Review",
         "",
-        "## Summary",
+        "## 摘要",
         "",
-        "- Reviewer: pending",
-        f"- Requirements: `{spec.requirements.relative_to(ROOT)}`",
-        f"- Design: `{spec.design.relative_to(ROOT)}`",
-        f"- Tasks: `{spec.tasks.relative_to(ROOT)}`",
+        "- 审查人：待补充",
+        f"- 需求文档：`{spec.requirements.relative_to(ROOT)}`",
+        f"- 设计文档：`{spec.design.relative_to(ROOT)}`",
+        f"- 任务文档：`{spec.tasks.relative_to(ROOT)}`",
+        f"- 语言约束：{language_instruction()}",
         "",
-        "## Findings",
+        "## 自动审查结果",
         "",
     ]
+    if not command_results:
+        lines.append("- 当前未启用真实 review 命令，请在 `.aiharness/config.json` 中开启。")
+    else:
+        for result in command_results:
+            lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`)")
+    lines.extend(["", "## 风险提示", ""])
     if not findings:
-        lines.append("- No automated risk findings yet.")
+        lines.append("- 当前没有命中文件级风险规则。")
     else:
         for risk, files in findings.items():
             lines.append(f"- `{risk}`: {', '.join(files)}")
-    lines.extend(["", "## Disposition", "", "- Pending review"])
+    lines.extend(["", "## 处置", "", "- 待补充人工 review 结论"])
     return "\n".join(lines) + "\n"
 
 
-def test_report_content(changed_files: list[str]) -> str:
+def test_report_content(changed_files: list[str], command_results: list[dict[str, Any]]) -> str:
     lines = [
-        "# Test Report",
+        "# 测试报告",
         "",
-        "## Planned Commands",
+        "## 语言约束",
         "",
-        "- Add project-specific test commands here.",
+        f"- {language_instruction()}",
         "",
-        "## Changed Files",
+        "## 已执行命令",
         "",
     ]
+    if not command_results:
+        lines.append("- 当前未启用真实 verify 命令，请在 `.aiharness/config.json` 中开启。")
+    else:
+        for result in command_results:
+            lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`)")
+    lines.extend(["", "## 变更文件", ""])
     if changed_files:
         lines.extend(f"- `{path}`" for path in changed_files)
     else:
-        lines.append("- No changed files detected.")
-    lines.extend(["", "## Results", "", "- Pending execution"])
+        lines.append("- 当前未检测到变更文件。")
+    lines.extend(["", "## 结果说明", "", "- 待补充测试结论"])
     return "\n".join(lines) + "\n"
 
 
 def handoff_content(spec: SpecPaths) -> str:
     return (
-        "# Handoff\n\n"
-        "## Delivered Behavior\n\n"
-        "- Pending summary\n\n"
-        "## References\n\n"
-        f"- Requirements: `{spec.requirements.relative_to(ROOT)}`\n"
-        f"- Design: `{spec.design.relative_to(ROOT)}`\n"
-        f"- Tasks: `{spec.tasks.relative_to(ROOT)}`\n"
-        f"- Review: `{spec.review.relative_to(ROOT)}`\n"
-        f"- Test report: `{spec.test_report.relative_to(ROOT)}`\n\n"
-        "## Follow-up\n\n"
-        "- Pending follow-up items\n"
+        "# 交付说明\n\n"
+        "## 交付内容\n\n"
+        "- 待补充\n\n"
+        "## 语言约束\n\n"
+        f"- {language_instruction()}\n\n"
+        "## 关联文档\n\n"
+        f"- 需求文档：`{spec.requirements.relative_to(ROOT)}`\n"
+        f"- 设计文档：`{spec.design.relative_to(ROOT)}`\n"
+        f"- 任务文档：`{spec.tasks.relative_to(ROOT)}`\n"
+        f"- Review：`{spec.review.relative_to(ROOT)}`\n"
+        f"- 测试报告：`{spec.test_report.relative_to(ROOT)}`\n\n"
+        "## 后续事项\n\n"
+        "- 待补充\n"
     )
 
 
 def print_json(payload: dict[str, object]) -> None:
-    print(json.dumps(payload, indent=2))
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def build_stamp(explicit_date: str | None, iteration: str) -> str:
@@ -318,6 +425,7 @@ def cmd_spec_intake(args: argparse.Namespace) -> int:
             "spec_root": str(spec.root.relative_to(ROOT)),
             "requirements": str(spec.requirements.relative_to(ROOT)),
             "project_docs": project_docs(),
+            "language": config().get("language", {}).get("default", "zh-CN"),
         }
     )
     return 0
@@ -343,22 +451,6 @@ def cmd_spec_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_spec_review(args: argparse.Namespace) -> int:
-    spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
-    changed = git_changed_files()
-    findings = collect_risks(changed)
-    ensure_file(spec.review, review_content(spec, findings))
-    print_json(
-        {
-            "command": "spec-review",
-            "review": str(spec.review.relative_to(ROOT)),
-            "changed_files": changed,
-            "risk_findings": findings,
-        }
-    )
-    return 0
-
-
 def cmd_spec_build(args: argparse.Namespace) -> int:
     spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
     if not spec.tasks.exists():
@@ -367,24 +459,49 @@ def cmd_spec_build(args: argparse.Namespace) -> int:
     payload = {
         "command": "spec-build",
         "tasks": str(spec.tasks.relative_to(ROOT)),
-        "next_step": "Implement the highest-priority slice and run ./hooks/post-edit/run after edits.",
+        "next_step": "按 tasks.md 先实现最高优先级切片，改完后执行 ./hooks/post-edit/run。",
+        "language": config().get("language", {}).get("default", "zh-CN"),
     }
     print_json(payload)
     return 0
 
 
+def cmd_spec_review(args: argparse.Namespace) -> int:
+    spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
+    changed = git_changed_files()
+    findings = collect_risks(changed)
+    command_results = execute_configured_commands("review")
+    write_text(spec.review, review_content(spec, findings, command_results), force=args.force)
+    failed = [result for result in command_results if result["returncode"] != 0]
+    print_json(
+        {
+            "command": "spec-review",
+            "review": str(spec.review.relative_to(ROOT)),
+            "changed_files": changed,
+            "risk_findings": findings,
+            "command_results": command_results,
+            "failed": [result["name"] for result in failed],
+        }
+    )
+    return 1 if failed else 0
+
+
 def cmd_spec_verify(args: argparse.Namespace) -> int:
     spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
     changed = git_changed_files()
-    ensure_file(spec.test_report, test_report_content(changed))
+    command_results = execute_configured_commands("verify")
+    write_text(spec.test_report, test_report_content(changed, command_results), force=args.force)
+    failed = [result for result in command_results if result["returncode"] != 0]
     print_json(
         {
             "command": "spec-verify",
             "test_report": str(spec.test_report.relative_to(ROOT)),
             "changed_files": changed,
+            "command_results": command_results,
+            "failed": [result["name"] for result in failed],
         }
     )
-    return 0
+    return 1 if failed else 0
 
 
 def cmd_spec_close(args: argparse.Namespace) -> int:
@@ -400,9 +517,10 @@ def cmd_hook_pre_task(_: argparse.Namespace) -> int:
         "hook": "pre-task",
         "project_docs": docs,
         "status": "ready" if docs else "warning",
+        "language": config().get("language", {}).get("default", "zh-CN"),
     }
     if not docs:
-        payload["message"] = "No project docs found under .docs/ or repo root."
+        payload["message"] = "当前仓库未发现 .docs/ 或根目录项目规范文档。"
     print_json(payload)
     return 0 if docs else 2
 
@@ -427,7 +545,7 @@ def cmd_hook_pre_review(_: argparse.Namespace) -> int:
         "ready": bool(changed),
     }
     if not changed:
-        payload["message"] = "No diff detected."
+        payload["message"] = "当前没有可 review 的 diff。"
     print_json(payload)
     return 0 if changed else 2
 
@@ -435,11 +553,12 @@ def cmd_hook_pre_review(_: argparse.Namespace) -> int:
 def cmd_hook_pre_verify(_: argparse.Namespace) -> int:
     changed = git_changed_files()
     verification_plan = {
-        "targeted": ["Run unit/spec tests for changed modules first."],
-        "broader": ["Run integration tests if changed files cross module boundaries."],
-        "browser": ["Add Playwright or remote debugging when UI files changed."]
+        "targeted": ["优先执行变更模块对应的单测或 spec。"],
+        "broader": ["跨模块修改时追加集成测试。"],
+        "browser": ["如果改动涉及 UI，再执行 Playwright 或远程调试验证。"]
         if any(part in path.lower() for path in changed for part in ("ui", "page", "component", "frontend"))
         else [],
+        "configured_commands": enabled_command_specs("verify"),
     }
     print_json({"hook": "pre-verify", "changed_files": changed, "verification_plan": verification_plan})
     return 0
@@ -455,6 +574,11 @@ def cmd_hook_pre_close(args: argparse.Namespace) -> int:
         "doc_drift_hints": doc_drift_hints(git_changed_files()),
     }
     print_json(payload)
+    return 0
+
+
+def cmd_show_config(_: argparse.Namespace) -> int:
+    print_json(config())
     return 0
 
 
@@ -491,16 +615,18 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--iteration", default="v1")
     build.set_defaults(func=cmd_spec_build)
 
-    review = sub.add_parser("spec-review", help="Create review.md if missing")
+    review = sub.add_parser("spec-review", help="Run configured review commands and write review.md")
     review.add_argument("--slug", required=True)
     review.add_argument("--date")
     review.add_argument("--iteration", default="v1")
+    review.add_argument("--force", action="store_true")
     review.set_defaults(func=cmd_spec_review)
 
-    verify = sub.add_parser("spec-verify", help="Create test-report.md if missing")
+    verify = sub.add_parser("spec-verify", help="Run configured verify commands and write test-report.md")
     verify.add_argument("--slug", required=True)
     verify.add_argument("--date")
     verify.add_argument("--iteration", default="v1")
+    verify.add_argument("--force", action="store_true")
     verify.set_defaults(func=cmd_spec_verify)
 
     close = sub.add_parser("spec-close", help="Create handoff.md if missing")
@@ -526,6 +652,9 @@ def parser() -> argparse.ArgumentParser:
     hook_pre_close.add_argument("--date")
     hook_pre_close.add_argument("--iteration", default="v1")
     hook_pre_close.set_defaults(func=cmd_hook_pre_close)
+
+    show_config = sub.add_parser("show-config", help="Show the active harness config")
+    show_config.set_defaults(func=cmd_show_config)
 
     return root
 

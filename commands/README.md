@@ -1,10 +1,10 @@
 # Commands
 
-This directory stores operator-invoked workflow entrypoints for the AI harness.
+这个目录用于存放 AI Harness 的显式工作流入口。
 
-Use commands to start a specific stage of the delivery flow without retyping the full prompt every time.
+你可以通过这些命令直接启动某个阶段，而不需要每次重复整段提示词。
 
-Executable entrypoints live alongside the markdown specs:
+可执行入口与 markdown 说明文件并存：
 
 - `commands/spec-intake`
 - `commands/spec-design`
@@ -14,9 +14,9 @@ Executable entrypoints live alongside the markdown specs:
 - `commands/spec-verify`
 - `commands/spec-close`
 
-All command wrappers call `bin/aih`, which dispatches to `scripts/harness.py`.
+所有命令包装脚本最终都会调用 `bin/aih`，再由 `scripts/harness.py` 执行。
 
-Recommended command set:
+推荐命令集合：
 
 - `spec-intake.md`
 - `spec-design.md`
@@ -26,7 +26,7 @@ Recommended command set:
 - `spec-verify.md`
 - `spec-close.md`
 
-Each command should define:
+每个命令应说明：
 
 - Purpose
 - Expected input
@@ -34,9 +34,9 @@ Each command should define:
 - Output files
 - Escalation rules
 
-Commands are explicit entrypoints. They do not run automatically.
+这些命令是显式入口，不会自动执行。
 
-## Examples
+## 示例
 
 ```bash
 ./commands/spec-intake --title "Add refund approval flow" --source "JIRA-123"

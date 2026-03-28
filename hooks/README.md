@@ -1,12 +1,12 @@
 # Hooks
 
-This directory stores automatic guardrails and event-driven checks for the AI harness.
+这个目录用于存放 AI Harness 的自动门禁和事件驱动检查。
 
-Hooks are not explicit operator commands. They run at specific lifecycle points.
+Hooks 不是手动命令，而是在特定生命周期节点执行的检查。
 
-Each hook folder contains an executable `run` wrapper. The wrapper delegates to `bin/aih`.
+每个 hook 目录下都有一个可执行的 `run` 包装脚本，最终会调用 `bin/aih`。
 
-Recommended hook points:
+推荐的 hook 检查点：
 
 - `pre-task/`
 - `post-edit/`
@@ -14,15 +14,15 @@ Recommended hook points:
 - `pre-verify/`
 - `pre-close/`
 
-Hooks should:
+Hooks 应该承担：
 
 - gather context
 - enforce safety and quality gates
 - block unsafe automation when necessary
 
-Hooks should not silently rewrite code.
+Hooks 不应静默改写代码。
 
-## Examples
+## 示例
 
 ```bash
 ./hooks/pre-task/run

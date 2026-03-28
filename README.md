@@ -1,29 +1,29 @@
 # AiHarness
 
-This repository is a Git-managed home for reusable AI workflow skills, templates, and operating conventions.
+这个仓库用于用 Git 管理可复用的 AI 工作流技能、模板、命令入口和自动化门禁。
 
-## Layout
+## 目录结构
 
-- `skills/`: Codex skills managed in Git
-- `templates/`: reusable spec templates
-- `commands/`: explicit workflow entrypoints
-- `hooks/`: automatic guardrails and checkpoints
-- `docs/`: workflow and operating notes
+- `skills/`: 由 Git 管理的 Codex skill
+- `templates/`: 可复用的 spec 模板
+- `commands/`: 显式触发的工作流入口
+- `hooks/`: 自动执行的检查点和门禁
+- `docs/`: 工作流与配置说明
 
-## Current Skill
+## 当前 Skill
 
 - `company-ai-harness`
 
-## Workflow Interfaces
+## 工作流接口
 
-- Commands define the explicit operator entrypoints for each stage.
-- Hooks define the automatic checks that run around those stages.
+- `commands/` 定义每个阶段的显式入口
+- `hooks/` 定义围绕这些阶段自动执行的检查
 
 ## CLI
 
-Use the shared CLI through `bin/aih` or the wrappers in `commands/` and `hooks/`.
+统一通过 `bin/aih` 或 `commands/`、`hooks/` 下的包装脚本调用。
 
-Examples:
+示例：
 
 ```bash
 ./commands/spec-intake --title "Add refund approval flow" --source "JIRA-123"
@@ -33,9 +33,20 @@ Examples:
 ./hooks/post-edit/run
 ```
 
-## Codex Integration
+## 配置
 
-Point Codex at the skill in this repo by linking:
+- 配置文件：`.aiharness/config.json`
+- 默认语言：中文
+- `spec-review` 和 `spec-verify` 会读取配置中的真实命令
+
+示例：
+
+- 在 `review.commands` 中启用 `npm run lint`
+- 在 `verify.commands` 中启用 `pytest` 或 `npx playwright test`
+
+## Codex 接入
+
+将 Codex 指向这个仓库中的 skill：
 
 ```bash
 ln -s /Users/zyh/Desktop/AiHarness/skills/company-ai-harness /Users/zyh/.codex/skills/company-ai-harness
