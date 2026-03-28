@@ -81,6 +81,15 @@
 
 当前版本会先做 provider 健康检查，不可用或未认证的 provider 会自动跳过。
 
+执行 `spec-run-team` 后还会自动生成：
+
+- `agent-results/provider-summary.json`
+- `agent-results/provider-summary.md`
+- `agent-results/reviewer-summary.md`
+- `agent-results/tester-summary.md`
+
+其中 `review.md` 和 `test-report.md` 会自动引用 reviewer/tester 的 provider 汇总。
+
 ## 执行计划与索引
 
 - `spec-team` 会自动在 `docs/exec-plans/active/` 下生成执行计划
@@ -88,6 +97,8 @@
 - `spec-start`、`spec-execute`、`spec-run-team`、`spec-finish` 会自动更新：
   - `docs/exec-plans/execution-index.json`
   - `docs/exec-plans/execution-index.md`
+  - `docs/exec-plans/execution-by-status.md`
+  - `docs/exec-plans/execution-by-slug.md`
 
 如果需要单独归档，也可以运行：
 

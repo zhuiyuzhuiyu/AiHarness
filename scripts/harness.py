@@ -23,6 +23,8 @@ EXEC_PLANS_ACTIVE_DIR = EXEC_PLANS_DIR / "active"
 EXEC_PLANS_COMPLETED_DIR = EXEC_PLANS_DIR / "completed"
 EXECUTION_INDEX_JSON = EXEC_PLANS_DIR / "execution-index.json"
 EXECUTION_INDEX_MD = EXEC_PLANS_DIR / "execution-index.md"
+EXECUTION_BY_STATUS_MD = EXEC_PLANS_DIR / "execution-by-status.md"
+EXECUTION_BY_SLUG_MD = EXEC_PLANS_DIR / "execution-by-slug.md"
 
 PROJECT_DOC_CANDIDATES = [
     ".docs/ARCHITECTURE.md",
@@ -943,6 +945,7 @@ def review_content(
     command_results: list[dict[str, Any]],
     findings: list[ReviewFinding],
 ) -> str:
+    provider_lines = load_provider_summary_lines(spec, "reviewer")
     lines = [
         "# Review",
         "",
@@ -963,6 +966,11 @@ def review_content(
         for result in command_results:
             mode = "自动发现" if result.get("auto_discovered") else "配置启用"
             lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`，{mode})")
+    lines.extend(["", "## Provider 汇总", ""])
+    if not provider_lines:
+        lines.append("- 当前没有 provider reviewer 输出。")
+    else:
+        lines.extend(f"- {line}" for line in provider_lines)
     lines.extend(["", "## 风险提示", ""])
     if not risk_findings:
         lines.append("- 当前没有命中文件级风险规则。")
@@ -981,7 +989,8 @@ def review_content(
     return "\n".join(lines) + "\n"
 
 
-def test_report_content(changed_files: list[str], command_results: list[dict[str, Any]]) -> str:
+def test_report_content(spec: SpecPaths, changed_files: list[str], command_results: list[dict[str, Any]]) -> str:
+    provider_lines = load_provider_summary_lines(spec, "tester")
     lines = [
         "# 测试报告",
         "",
@@ -998,6 +1007,11 @@ def test_report_content(changed_files: list[str], command_results: list[dict[str
         for result in command_results:
             mode = "自动发现" if result.get("auto_discovered") else "配置启用"
             lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`，{mode})")
+    lines.extend(["", "## Provider 汇总", ""])
+    if not provider_lines:
+        lines.append("- 当前没有 provider tester 输出。")
+    else:
+        lines.extend(f"- {line}" for line in provider_lines)
     lines.extend(["", "## 变更文件", ""])
     if changed_files:
         lines.extend(f"- `{path}`" for path in changed_files)
@@ -1071,6 +1085,45 @@ def write_execution_index(entries: list[dict[str, Any]]) -> None:
         )
     EXECUTION_INDEX_MD.write_text("\n".join(lines) + "\n")
 
+    by_status: dict[str, list[dict[str, Any]]] = {}
+    by_slug: dict[str, list[dict[str, Any]]] = {}
+    for item in entries:
+        by_status.setdefault(item["status"], []).append(item)
+        by_slug.setdefault(item["slug"], []).append(item)
+
+    status_lines = ["# Execution By Status", "", "## 状态汇总", ""]
+    if not by_status:
+        status_lines.append("- 当前没有执行记录。")
+    else:
+        for status, items in sorted(by_status.items()):
+            status_lines.append(f"- `{status}`: {len(items)}")
+        status_lines.extend(["", "## 最近记录", ""])
+        for status, items in sorted(by_status.items()):
+            status_lines.append(f"### `{status}`")
+            status_lines.append("")
+            for item in items[-10:]:
+                status_lines.append(f"- `{item['date']}` `{item['command']}` / `{item['slug']}` / `{item['stamp']}`")
+            status_lines.append("")
+    EXECUTION_BY_STATUS_MD.write_text("\n".join(status_lines).rstrip() + "\n")
+
+    slug_lines = ["# Execution By Slug", "", "## slug 汇总", ""]
+    if not by_slug:
+        slug_lines.append("- 当前没有执行记录。")
+    else:
+        for slug, items in sorted(by_slug.items()):
+            latest = items[-1]
+            slug_lines.append(
+                f"- `{slug}`: {len(items)} 次，最近状态 `{latest['status']}`，最近命令 `{latest['command']}`"
+            )
+        slug_lines.extend(["", "## 最近记录", ""])
+        for slug, items in sorted(by_slug.items()):
+            slug_lines.append(f"### `{slug}`")
+            slug_lines.append("")
+            for item in items[-10:]:
+                slug_lines.append(f"- `{item['date']}` `{item['command']}` / `{item['stamp']}` / `{item['status']}`")
+            slug_lines.append("")
+    EXECUTION_BY_SLUG_MD.write_text("\n".join(slug_lines).rstrip() + "\n")
+
 
 def record_execution_event(command: str, slug: str, stamp: str, status: str, note: str = "") -> None:
     entries = execution_index_payload()
@@ -1104,6 +1157,137 @@ def exec_plan_content(spec: SpecPaths, signals: dict[str, Any], status: str) -> 
         f"- 任务数：{signals['task_count']}\n"
         f"- 是否启用 team：{'是' if signals['should_enable_team'] else '否'}\n"
     )
+
+
+def provider_summary_paths(spec: SpecPaths) -> dict[str, Path]:
+    base = spec.root / "agent-results"
+    return {
+        "json": base / "provider-summary.json",
+        "markdown": base / "provider-summary.md",
+        "reviewer": base / "reviewer-summary.md",
+        "tester": base / "tester-summary.md",
+    }
+
+
+def extract_summary_lines(text: str, limit: int = 5) -> list[str]:
+    selected: list[str] = []
+    keywords = ("P1", "P2", "P3", "risk", "风险", "finding", "问题", "建议", "阻塞", "测试", "review")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if re.match(r"^[-*]\s+", line) or re.match(r"^\d+\.\s+", line) or any(keyword in line for keyword in keywords):
+            normalized = re.sub(r"^[-*]\s+", "", line)
+            normalized = re.sub(r"^\d+\.\s+", "", normalized)
+            selected.append(truncate(normalized, 180))
+        if len(selected) >= limit:
+            break
+    if selected:
+        return selected
+    fallback = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[-*]\s+", "", line)
+        line = re.sub(r"^\d+\.\s+", "", line)
+        fallback.append(truncate(line, 180))
+    return fallback[:limit]
+
+
+def collect_provider_results(spec: SpecPaths, executions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    base = spec.root / "agent-results"
+    execution_map = {item.get("output"): item for item in (executions or []) if item.get("output")}
+    entries: list[dict[str, Any]] = []
+    for path in sorted(base.glob("*.result.md")):
+        parts = path.name.split(".")
+        if len(parts) < 4:
+            continue
+        rel_path = str(path.relative_to(ROOT))
+        text = path.read_text().strip()
+        execution = execution_map.get(rel_path, {})
+        entries.append(
+            {
+                "agent": parts[0],
+                "provider": parts[1],
+                "path": rel_path,
+                "status": execution.get("status", "captured" if text else "empty"),
+                "returncode": execution.get("returncode"),
+                "highlights": extract_summary_lines(text),
+            }
+        )
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entry in entries:
+        grouped.setdefault(entry["agent"], []).append(entry)
+    return {"entries": entries, "grouped": grouped}
+
+
+def provider_summary_markdown(agent: str, items: list[dict[str, Any]]) -> str:
+    lines = [f"# {agent.capitalize()} Provider Summary", "", "## 汇总", ""]
+    if not items:
+        lines.append("- 当前没有 provider 结果。")
+    else:
+        for item in items:
+            lines.append(f"- `{item['provider']}`: `{item['status']}`，结果文件 `{item['path']}`")
+        lines.extend(["", "## Highlights", ""])
+        for item in items:
+            lines.append(f"### `{item['provider']}`")
+            lines.append("")
+            if item["highlights"]:
+                for highlight in item["highlights"]:
+                    lines.append(f"- {highlight}")
+            else:
+                lines.append("- 当前没有可提取的摘要。")
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_provider_summaries(spec: SpecPaths, executions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    summaries = collect_provider_results(spec, executions)
+    paths = provider_summary_paths(spec)
+    entries = summaries["entries"]
+    grouped = summaries["grouped"]
+    save_json(paths["json"], {"entries": entries})
+
+    md_lines = ["# Provider Summary", "", "## 总览", ""]
+    if not entries:
+        md_lines.append("- 当前没有 provider 输出结果。")
+    else:
+        for entry in entries:
+            md_lines.append(f"- `{entry['agent']}` / `{entry['provider']}`: `{entry['status']}` (`{entry['path']}`)")
+        md_lines.extend(["", "## Agent Highlights", ""])
+        for agent, items in sorted(grouped.items()):
+            md_lines.append(f"### `{agent}`")
+            md_lines.append("")
+            for item in items:
+                if item["highlights"]:
+                    md_lines.append(f"- `{item['provider']}`: {item['highlights'][0]}")
+                else:
+                    md_lines.append(f"- `{item['provider']}`: 当前没有可提取的摘要。")
+            md_lines.append("")
+    paths["markdown"].write_text("\n".join(md_lines).rstrip() + "\n")
+    paths["reviewer"].write_text(provider_summary_markdown("reviewer", grouped.get("reviewer", [])))
+    paths["tester"].write_text(provider_summary_markdown("tester", grouped.get("tester", [])))
+    return {
+        "json": str(paths["json"].relative_to(ROOT)),
+        "markdown": str(paths["markdown"].relative_to(ROOT)),
+        "reviewer": str(paths["reviewer"].relative_to(ROOT)),
+        "tester": str(paths["tester"].relative_to(ROOT)),
+        "entry_count": len(entries),
+    }
+
+
+def load_provider_summary_lines(spec: SpecPaths, agent: str) -> list[str]:
+    path = provider_summary_paths(spec)[agent]
+    if not path.exists():
+        return []
+    lines: list[str] = []
+    for raw in path.read_text().splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("- "):
+            lines.append(stripped[2:])
+    return lines[:8]
 
 
 def run_or_fail(func, args: argparse.Namespace) -> dict[str, Any]:
@@ -1209,7 +1393,7 @@ def cmd_spec_verify(args: argparse.Namespace) -> int:
     spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
     changed = git_changed_files()
     command_results = execute_configured_commands("verify")
-    write_text(spec.test_report, test_report_content(changed, command_results), force=args.force)
+    write_text(spec.test_report, test_report_content(spec, changed, command_results), force=args.force)
     failed = [result for result in command_results if result["returncode"] != 0]
     print_json(
         {
@@ -1363,6 +1547,7 @@ def cmd_spec_run_team(args: argparse.Namespace) -> int:
     executions: list[dict[str, Any]] = []
     if args.execute:
         executions = run_team_plan(spec, run_plan)
+    provider_summaries = write_provider_summaries(spec, executions)
 
     print_json(
         {
@@ -1371,6 +1556,7 @@ def cmd_spec_run_team(args: argparse.Namespace) -> int:
             "providers": run_plan["providers"],
             "agents": run_plan["agents"],
             "executions": executions,
+            "provider_summaries": provider_summaries,
         }
     )
     if args.execute:
