@@ -191,6 +191,8 @@ Recommended team shape:
 - `reviewer` agent for diff critique
 - `tester` agent for validation and reproduction
 
+在仓库中优先通过 `.aiharness/orchestrator.json` 配置 team 角色、触发阈值和输出路径。`spec-team` 应先生成本地 orchestration 计划，再决定是否接入真实 provider。
+
 ## E2E Guidance
 
 Prefer deterministic tool-driven verification over free-form browsing.

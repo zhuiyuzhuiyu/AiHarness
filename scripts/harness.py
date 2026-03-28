@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = ROOT / "templates"
 SPECS_DIR = ROOT / "specs"
 CONFIG_PATH = ROOT / ".aiharness" / "config.json"
+ORCHESTRATOR_PATH = ROOT / ".aiharness" / "orchestrator.json"
 
 PROJECT_DOC_CANDIDATES = [
     ".docs/ARCHITECTURE.md",
@@ -163,6 +164,127 @@ class ReviewFinding:
     summary: str
     files: tuple[str, ...]
     source: str
+
+
+def orchestrator_config() -> dict[str, Any]:
+    if not ORCHESTRATOR_PATH.exists():
+        return {"team": {"enabled": False, "agents": []}}
+    return read_json(ORCHESTRATOR_PATH)
+
+
+def count_task_items(tasks_path: Path) -> int:
+    if not tasks_path.exists():
+        return 0
+    count = 0
+    for line in tasks_path.read_text().splitlines():
+        stripped = line.strip()
+        if re.match(r"^[-*]\s+", stripped) or re.match(r"^\d+\.\s+", stripped):
+            count += 1
+    return count
+
+
+def infer_subsystems(changed_files: list[str]) -> list[str]:
+    subsystems: set[str] = set()
+    for path in changed_files:
+        parts = [part for part in path.split("/") if part and part not in {".", ".."}]
+        if not parts:
+            continue
+        if parts[0] in {"src", "app", "server", "api", "web", "frontend", "backend"} and len(parts) > 1:
+            subsystems.add("/".join(parts[:2]))
+        else:
+            subsystems.add(parts[0])
+    return sorted(subsystems)
+
+
+def team_signals(spec: SpecPaths, changed_files: list[str]) -> dict[str, Any]:
+    orchestrator = orchestrator_config().get("team", {})
+    risk_categories = collect_risks(changed_files)
+    subsystems = infer_subsystems(changed_files)
+    task_count = count_task_items(spec.tasks)
+    triggers = orchestrator.get("triggers", {})
+    signals = {
+        "risk_category_count": len(risk_categories),
+        "risk_categories": sorted(risk_categories.keys()),
+        "subsystem_count": len(subsystems),
+        "subsystems": subsystems,
+        "task_count": task_count,
+        "parallel_review_verify": bool(configured_or_discovered_commands("review") or configured_or_discovered_commands("verify")),
+    }
+    score = 0
+    reasons: list[str] = []
+    if triggers.get("high_risk_categories", True) and signals["risk_category_count"] > 0:
+        score += 1
+        reasons.append("命中高风险改动类别")
+    if signals["subsystem_count"] >= triggers.get("subsystems_threshold", 3):
+        score += 1
+        reasons.append("涉及的子系统数量超过阈值")
+    if signals["task_count"] >= triggers.get("task_count_threshold", 4):
+        score += 1
+        reasons.append("任务切片数量超过阈值")
+    if triggers.get("requires_review_and_verify_parallel", True) and signals["parallel_review_verify"]:
+        score += 1
+        reasons.append("存在 review/verify 并行价值")
+    signals["score"] = score
+    signals["reasons"] = reasons
+    signals["threshold"] = orchestrator.get("auto_enable_threshold", 2)
+    signals["should_enable_team"] = score >= signals["threshold"]
+    return signals
+
+
+def team_plan_content(spec: SpecPaths, signals: dict[str, Any], agents: list[dict[str, Any]]) -> str:
+    lines = [
+        "# Team Orchestration",
+        "",
+        "## 结论",
+        "",
+        f"- 是否启用 agents team：{'是' if signals['should_enable_team'] else '否'}",
+        f"- 评分：{signals['score']} / 阈值 {signals['threshold']}",
+        "",
+        "## 触发原因",
+        "",
+    ]
+    if signals["reasons"]:
+        lines.extend(f"- {reason}" for reason in signals["reasons"])
+    else:
+        lines.append("- 当前未达到自动启用条件。")
+    lines.extend(
+        [
+            "",
+            "## 信号",
+            "",
+            f"- 高风险类别：{', '.join(signals['risk_categories']) or '无'}",
+            f"- 子系统：{', '.join(signals['subsystems']) or '无'}",
+            f"- 任务数：{signals['task_count']}",
+            f"- 并行 review/verify：{'是' if signals['parallel_review_verify'] else '否'}",
+            "",
+            "## Agent 计划",
+            "",
+        ]
+    )
+    for agent in agents:
+        output = spec.root / agent["output"]
+        lines.append(f"- `{agent['name']}`：{agent['role']}")
+        lines.append(f"  输入：{', '.join(agent.get('inputs', []))}")
+        lines.append(f"  输出：`{output.relative_to(ROOT)}`")
+    return "\n".join(lines) + "\n"
+
+
+def agent_prompt_content(spec: SpecPaths, agent: dict[str, Any], signals: dict[str, Any]) -> str:
+    return (
+        f"# {agent['name']}\n\n"
+        f"## 角色\n\n{agent['role']}\n\n"
+        "## 语言约束\n\n"
+        f"- {language_instruction()}\n\n"
+        "## 输入\n\n"
+        + "\n".join(f"- {item}" for item in agent.get("inputs", []))
+        + "\n\n## 当前信号\n\n"
+        f"- 高风险类别：{', '.join(signals['risk_categories']) or '无'}\n"
+        f"- 子系统：{', '.join(signals['subsystems']) or '无'}\n"
+        f"- 任务数：{signals['task_count']}\n"
+        f"- 需求文档：`{spec.requirements.relative_to(ROOT)}`\n"
+        f"- 设计文档：`{spec.design.relative_to(ROOT)}`\n"
+        f"- 任务文档：`{spec.tasks.relative_to(ROOT)}`\n"
+    )
 
 
 def slugify(value: str) -> str:
@@ -954,6 +1076,33 @@ def cmd_discover_commands(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_spec_team(args: argparse.Namespace) -> int:
+    spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
+    changed_files = git_changed_files() or git_diff_name_only()
+    orchestrator = orchestrator_config().get("team", {})
+    agents = orchestrator.get("agents", [])
+    signals = team_signals(spec, changed_files)
+
+    team_plan = spec.root / "orchestration.md"
+    write_text(team_plan, team_plan_content(spec, signals, agents), force=args.force)
+
+    generated_outputs: list[str] = [str(team_plan.relative_to(ROOT))]
+    for agent in agents:
+        output_path = spec.root / agent["output"]
+        write_text(output_path, agent_prompt_content(spec, agent, signals), force=args.force)
+        generated_outputs.append(str(output_path.relative_to(ROOT)))
+
+    print_json(
+        {
+            "command": "spec-team",
+            "team_enabled": signals["should_enable_team"],
+            "signals": signals,
+            "outputs": generated_outputs,
+        }
+    )
+    return 0 if signals["should_enable_team"] else 2
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="AI Harness command and hook runner")
     sub = root.add_subparsers(dest="command", required=True)
@@ -1031,6 +1180,13 @@ def parser() -> argparse.ArgumentParser:
     discover = sub.add_parser("discover-commands", help="Discover review and verify commands from the current repo")
     discover.add_argument("--apply", action="store_true")
     discover.set_defaults(func=cmd_discover_commands)
+
+    team = sub.add_parser("spec-team", help="Generate a multi-agent orchestration plan")
+    team.add_argument("--slug", required=True)
+    team.add_argument("--date")
+    team.add_argument("--iteration", default="v1")
+    team.add_argument("--force", action="store_true")
+    team.set_defaults(func=cmd_spec_team)
 
     return root
 

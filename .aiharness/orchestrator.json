@@ -1,0 +1,55 @@
+{
+  "language": "zh-CN",
+  "team": {
+    "enabled": true,
+    "auto_enable_threshold": 2,
+    "triggers": {
+      "high_risk_categories": true,
+      "subsystems_threshold": 3,
+      "task_count_threshold": 4,
+      "requires_review_and_verify_parallel": true
+    },
+    "agents": [
+      {
+        "name": "architect",
+        "role": "负责拆分方案、检查边界和确定执行顺序。",
+        "inputs": [
+          "requirements.md",
+          "design.md",
+          "tasks.md"
+        ],
+        "output": "agent-results/architect.md"
+      },
+      {
+        "name": "builder",
+        "role": "负责按切片实施代码改动。",
+        "inputs": [
+          "tasks.md",
+          "architect.md"
+        ],
+        "output": "agent-results/builder.md"
+      },
+      {
+        "name": "reviewer",
+        "role": "负责审查 diff、风险和回归问题。",
+        "inputs": [
+          "requirements.md",
+          "design.md",
+          "tasks.md",
+          "diff"
+        ],
+        "output": "agent-results/reviewer.md"
+      },
+      {
+        "name": "tester",
+        "role": "负责验证计划、测试执行和失败复现。",
+        "inputs": [
+          "tasks.md",
+          "review.md",
+          "test-report.md"
+        ],
+        "output": "agent-results/tester.md"
+      }
+    ]
+  }
+}

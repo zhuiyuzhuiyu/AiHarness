@@ -31,6 +31,7 @@
 ./commands/spec-plan --slug refund-approval
 ./commands/spec-build --slug refund-approval
 ./commands/discover-commands --apply
+./commands/spec-team --slug refund-approval
 ./hooks/post-edit/run
 ```
 
@@ -55,6 +56,16 @@
 ```
 
 如果 URL 可读取，就会自动提取标题、正文、状态、标签和评论摘要，并写入 `requirements.md`。
+
+## Agents Team
+
+复杂需求可以通过 `spec-team` 进入多 agent 编排模式：
+
+```bash
+./commands/spec-team --slug refund-approval
+```
+
+当前版本会根据 spec、风险和任务数生成 team 计划，并把每个 agent 的执行说明写入 `agent-results/`。
 
 ## Codex 接入
 

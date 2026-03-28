@@ -14,6 +14,7 @@
 - `commands/spec-verify`
 - `commands/spec-close`
 - `commands/discover-commands`
+- `commands/spec-team`
 
 所有命令包装脚本最终都会调用 `bin/aih`，再由 `scripts/harness.py` 执行。
 
@@ -44,4 +45,5 @@
 ./commands/spec-design --slug refund-approval
 ./commands/spec-plan --slug refund-approval
 ./commands/discover-commands --apply
+./commands/spec-team --slug refund-approval
 ```
