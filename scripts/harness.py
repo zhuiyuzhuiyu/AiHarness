@@ -156,6 +156,15 @@ class SpecPaths:
     handoff: Path
 
 
+@dataclass(frozen=True)
+class ReviewFinding:
+    priority: str
+    title: str
+    summary: str
+    files: tuple[str, ...]
+    source: str
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
     if not slug:
@@ -235,6 +244,31 @@ def git_changed_files() -> list[str]:
             continue
         changed.append(line[3:].strip())
     return changed
+
+
+def git_diff_name_only() -> list[str]:
+    result = shell(["git", "-C", str(ROOT), "diff", "--name-only", "HEAD"])
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def git_diff_stats() -> list[dict[str, Any]]:
+    result = shell(["git", "-C", str(ROOT), "diff", "--numstat", "HEAD"])
+    stats: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        added, deleted, path = parts
+        try:
+            add_count = int(added)
+        except ValueError:
+            add_count = 0
+        try:
+            del_count = int(deleted)
+        except ValueError:
+            del_count = 0
+        stats.append({"path": path, "added": add_count, "deleted": del_count, "total": add_count + del_count})
+    return stats
 
 
 def collect_risks(changed_files: Iterable[str]) -> dict[str, list[str]]:
@@ -479,6 +513,13 @@ def configured_or_discovered_commands(section: str) -> list[dict[str, Any]]:
     return discovered_commands().get(section, [])
 
 
+def truncate(text: str, limit: int = 220) -> str:
+    stripped = " ".join(text.split())
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[: limit - 3] + "..."
+
+
 def run_shell_command(command: str) -> dict[str, Any]:
     result = subprocess.run(
         command,
@@ -508,7 +549,113 @@ def execute_configured_commands(section: str) -> list[dict[str, Any]]:
     return results
 
 
-def review_content(spec: SpecPaths, findings: dict[str, list[str]], command_results: list[dict[str, Any]]) -> str:
+def synthesize_review_findings(
+    spec: SpecPaths,
+    changed_files: list[str],
+    risk_findings: dict[str, list[str]],
+    doc_hints: dict[str, list[str]],
+    command_results: list[dict[str, Any]],
+) -> list[ReviewFinding]:
+    findings: list[ReviewFinding] = []
+
+    for required_path, label in (
+        (spec.requirements, "需求文档"),
+        (spec.design, "设计文档"),
+        (spec.tasks, "任务文档"),
+    ):
+        if not required_path.exists():
+            findings.append(
+                ReviewFinding(
+                    priority="P1",
+                    title=f"{label}缺失",
+                    summary=f"`{required_path.relative_to(ROOT)}` 不存在，当前 diff 缺少完整的 spec 上下文，继续开发或审查风险较高。",
+                    files=(str(required_path.relative_to(ROOT)),),
+                    source="spec",
+                )
+            )
+
+    for result in command_results:
+        if result["returncode"] == 0:
+            continue
+        details = result["stderr"] or result["stdout"] or "命令返回非零退出码，但没有输出。"
+        findings.append(
+            ReviewFinding(
+                priority="P1",
+                title=f"Review 命令失败：{result['name']}",
+                summary=f"`{result['command']}` 执行失败。关键信息：{truncate(details)}",
+                files=tuple(changed_files[:5]),
+                source="command",
+            )
+        )
+
+    risk_priority = {
+        "security": "P1",
+        "billing": "P1",
+        "migration": "P1",
+        "infrastructure": "P2",
+    }
+    risk_summary = {
+        "security": "当前改动触达鉴权、密钥或安全边界相关文件，应补充权限与回归验证。",
+        "billing": "当前改动触达计费、支付或退款相关文件，应补充业务正确性和对账验证。",
+        "migration": "当前改动触达迁移或数据库结构相关文件，应补充回滚与数据安全检查。",
+        "infrastructure": "当前改动触达部署或基础设施文件，应确认环境影响和发布策略。",
+    }
+    for risk, files in risk_findings.items():
+        findings.append(
+            ReviewFinding(
+                priority=risk_priority.get(risk, "P2"),
+                title=f"高风险改动：{risk}",
+                summary=risk_summary.get(risk, "当前改动涉及高风险区域，应补充专项 review。"),
+                files=tuple(files[:5]),
+                source="risk",
+            )
+        )
+
+    for doc_path, files in doc_hints.items():
+        findings.append(
+            ReviewFinding(
+                priority="P3",
+                title=f"文档可能需要同步：{doc_path}",
+                summary=f"当前变更涉及 {', '.join(files[:3])}，按规则应检查 `{doc_path}` 是否需要更新。",
+                files=tuple(files[:5]),
+                source="docs",
+            )
+        )
+
+    stats = git_diff_stats()
+    large_changes = [item["path"] for item in stats if item["total"] >= 200]
+    if large_changes:
+        findings.append(
+            ReviewFinding(
+                priority="P2",
+                title="大体量改动需要拆分审查",
+                summary=f"以下文件 diff 较大：{', '.join(large_changes[:5])}。建议拆分提交或补充更细粒度验证，降低 review 漏检风险。",
+                files=tuple(large_changes[:5]),
+                source="diff",
+            )
+        )
+
+    if changed_files and not command_results:
+        findings.append(
+            ReviewFinding(
+                priority="P2",
+                title="未执行任何自动审查命令",
+                summary="当前存在代码变更，但没有启用或发现可执行的 review 命令。至少应补一条 lint、typecheck 或快速回归检查。",
+                files=tuple(changed_files[:5]),
+                source="command",
+            )
+        )
+
+    findings.sort(key=lambda item: (item.priority, item.title))
+    return findings
+
+
+def review_content(
+    spec: SpecPaths,
+    risk_findings: dict[str, list[str]],
+    command_results: list[dict[str, Any]],
+    findings: list[ReviewFinding],
+) -> str:
     lines = [
         "# Review",
         "",
@@ -530,11 +677,19 @@ def review_content(spec: SpecPaths, findings: dict[str, list[str]], command_resu
             mode = "自动发现" if result.get("auto_discovered") else "配置启用"
             lines.append(f"- `{result['name']}`: {result['status']} (`{result['command']}`，{mode})")
     lines.extend(["", "## 风险提示", ""])
-    if not findings:
+    if not risk_findings:
         lines.append("- 当前没有命中文件级风险规则。")
     else:
-        for risk, files in findings.items():
+        for risk, files in risk_findings.items():
             lines.append(f"- `{risk}`: {', '.join(files)}")
+    lines.extend(["", "## Findings", ""])
+    if not findings:
+        lines.append("- 当前没有生成结构化 findings。")
+    else:
+        for item in findings:
+            file_refs = ", ".join(item.files) if item.files else "无"
+            lines.append(f"- `{item.priority}` {item.title}")
+            lines.append(f"  来源：{item.source}；关联文件：{file_refs}；说明：{item.summary}")
     lines.extend(["", "## 处置", "", "- 待补充人工 review 结论"])
     return "\n".join(lines) + "\n"
 
@@ -652,10 +807,12 @@ def cmd_spec_build(args: argparse.Namespace) -> int:
 
 def cmd_spec_review(args: argparse.Namespace) -> int:
     spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
-    changed = git_changed_files()
+    changed = git_changed_files() or git_diff_name_only()
     findings = collect_risks(changed)
+    doc_hints = doc_drift_hints(changed)
     command_results = execute_configured_commands("review")
-    write_text(spec.review, review_content(spec, findings, command_results), force=args.force)
+    structured_findings = synthesize_review_findings(spec, changed, findings, doc_hints, command_results)
+    write_text(spec.review, review_content(spec, findings, command_results, structured_findings), force=args.force)
     failed = [result for result in command_results if result["returncode"] != 0]
     print_json(
         {
@@ -663,11 +820,23 @@ def cmd_spec_review(args: argparse.Namespace) -> int:
             "review": str(spec.review.relative_to(ROOT)),
             "changed_files": changed,
             "risk_findings": findings,
+            "doc_drift_hints": doc_hints,
             "command_results": command_results,
+            "findings": [
+                {
+                    "priority": item.priority,
+                    "title": item.title,
+                    "summary": item.summary,
+                    "files": list(item.files),
+                    "source": item.source,
+                }
+                for item in structured_findings
+            ],
             "failed": [result["name"] for result in failed],
         }
     )
-    return 1 if failed else 0
+    high_priority = [item for item in structured_findings if item.priority in {"P1", "P2"}]
+    return 1 if failed or high_priority else 0
 
 
 def cmd_spec_verify(args: argparse.Namespace) -> int:
