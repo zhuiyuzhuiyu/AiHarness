@@ -14,6 +14,7 @@
 - 生成 orchestration 计划
 - 为每个 agent 生成输入说明和输出路径
 - 把结果落到 `specs/<slug>/<date-v1>/agent-results/`
+- 根据 provider 健康状态生成运行计划
 
 ## 默认角色
 
@@ -21,6 +22,22 @@
 - `builder`
 - `reviewer`
 - `tester`
+
+## Provider Adapter
+
+Provider 配置位于 `.aiharness/orchestrator.json` 的 `providers` 字段。
+
+当前支持的本地 CLI provider：
+
+- `codex`
+- `gemini`
+
+`spec-run-team` 会：
+
+1. 检查命令是否存在
+2. 运行轻量健康检查
+3. 生成 `run-plan.json`
+4. 可选执行当前可用 provider
 
 ## 自动启用条件
 

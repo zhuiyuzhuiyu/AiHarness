@@ -32,6 +32,7 @@
 ./commands/spec-build --slug refund-approval
 ./commands/discover-commands --apply
 ./commands/spec-team --slug refund-approval
+./commands/spec-run-team --slug refund-approval
 ./hooks/post-edit/run
 ```
 
@@ -66,6 +67,15 @@
 ```
 
 当前版本会根据 spec、风险和任务数生成 team 计划，并把每个 agent 的执行说明写入 `agent-results/`。
+
+如果要继续到 provider 选择和执行阶段，可以运行：
+
+```bash
+./commands/spec-run-team --slug refund-approval
+./commands/spec-run-team --slug refund-approval --execute
+```
+
+当前版本会先做 provider 健康检查，不可用或未认证的 provider 会自动跳过。
 
 ## Codex 接入
 

@@ -193,6 +193,8 @@ Recommended team shape:
 
 在仓库中优先通过 `.aiharness/orchestrator.json` 配置 team 角色、触发阈值和输出路径。`spec-team` 应先生成本地 orchestration 计划，再决定是否接入真实 provider。
 
+provider 不应硬编码在 skill 本体中。优先从 `.aiharness/orchestrator.json` 的 `providers` 和 `team.agents[].providers` 读取。当前默认 provider 组合是 `codex + gemini`。执行前先做健康检查，不可用 provider 自动跳过。
+
 ## E2E Guidance
 
 Prefer deterministic tool-driven verification over free-form browsing.

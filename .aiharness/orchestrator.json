@@ -1,5 +1,28 @@
 {
   "language": "zh-CN",
+  "providers": {
+    "codex": {
+      "enabled": true,
+      "command": "codex",
+      "model": "",
+      "execution": "native",
+      "auth_check": [
+        "codex",
+        "exec",
+        "--help"
+      ]
+    },
+    "gemini": {
+      "enabled": true,
+      "command": "gemini",
+      "model": "",
+      "execution": "native",
+      "auth_check": [
+        "gemini",
+        "--help"
+      ]
+    }
+  },
   "team": {
     "enabled": true,
     "auto_enable_threshold": 2,
@@ -13,6 +36,10 @@
       {
         "name": "architect",
         "role": "负责拆分方案、检查边界和确定执行顺序。",
+        "providers": [
+          "codex"
+        ],
+        "stage": 1,
         "inputs": [
           "requirements.md",
           "design.md",
@@ -23,6 +50,10 @@
       {
         "name": "builder",
         "role": "负责按切片实施代码改动。",
+        "providers": [
+          "codex"
+        ],
+        "stage": 2,
         "inputs": [
           "tasks.md",
           "architect.md"
@@ -32,6 +63,11 @@
       {
         "name": "reviewer",
         "role": "负责审查 diff、风险和回归问题。",
+        "providers": [
+          "codex",
+          "gemini"
+        ],
+        "stage": 3,
         "inputs": [
           "requirements.md",
           "design.md",
@@ -43,6 +79,11 @@
       {
         "name": "tester",
         "role": "负责验证计划、测试执行和失败复现。",
+        "providers": [
+          "codex",
+          "gemini"
+        ],
+        "stage": 3,
         "inputs": [
           "tasks.md",
           "review.md",

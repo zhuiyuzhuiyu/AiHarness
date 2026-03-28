@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -172,6 +173,10 @@ def orchestrator_config() -> dict[str, Any]:
     return read_json(ORCHESTRATOR_PATH)
 
 
+def orchestrator_providers() -> dict[str, Any]:
+    return orchestrator_config().get("providers", {})
+
+
 def count_task_items(tasks_path: Path) -> int:
     if not tasks_path.exists():
         return 0
@@ -264,6 +269,8 @@ def team_plan_content(spec: SpecPaths, signals: dict[str, Any], agents: list[dic
     for agent in agents:
         output = spec.root / agent["output"]
         lines.append(f"- `{agent['name']}`：{agent['role']}")
+        lines.append(f"  provider：{', '.join(agent.get('providers', [])) or '未配置'}")
+        lines.append(f"  stage：{agent.get('stage', 0)}")
         lines.append(f"  输入：{', '.join(agent.get('inputs', []))}")
         lines.append(f"  输出：`{output.relative_to(ROOT)}`")
     return "\n".join(lines) + "\n"
@@ -277,6 +284,8 @@ def agent_prompt_content(spec: SpecPaths, agent: dict[str, Any], signals: dict[s
         f"- {language_instruction()}\n\n"
         "## 输入\n\n"
         + "\n".join(f"- {item}" for item in agent.get("inputs", []))
+        + "\n\n## Provider 候选\n\n"
+        + "\n".join(f"- {item}" for item in agent.get("providers", []))
         + "\n\n## 当前信号\n\n"
         f"- 高风险类别：{', '.join(signals['risk_categories']) or '无'}\n"
         f"- 子系统：{', '.join(signals['subsystems']) or '无'}\n"
@@ -285,6 +294,150 @@ def agent_prompt_content(spec: SpecPaths, agent: dict[str, Any], signals: dict[s
         f"- 设计文档：`{spec.design.relative_to(ROOT)}`\n"
         f"- 任务文档：`{spec.tasks.relative_to(ROOT)}`\n"
     )
+
+
+def provider_health(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    command = payload.get("command", name)
+    exists = shell(["zsh", "-lc", f"command -v {command}"]).returncode == 0
+    if not exists:
+        return {"provider": name, "available": False, "reason": "command-not-found"}
+    auth_check = payload.get("auth_check")
+    if isinstance(auth_check, list) and auth_check:
+        result = shell(auth_check)
+        if result.returncode != 0:
+            return {
+                "provider": name,
+                "available": False,
+                "reason": "auth-check-failed",
+                "stderr": truncate(result.stderr or result.stdout or "provider health check failed"),
+            }
+    return {"provider": name, "available": True, "reason": "ok"}
+
+
+def provider_run_command(provider_name: str, provider: dict[str, Any], prompt_path: Path, output_path: Path) -> list[str]:
+    model = provider.get("model", "")
+    if provider_name == "codex":
+        command = [
+            provider["command"],
+            "exec",
+            "--skip-git-repo-check",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-C",
+            str(ROOT),
+            "-o",
+            str(output_path),
+            "-",
+        ]
+        if model:
+            command.extend(["-m", model])
+        return command
+    if provider_name == "gemini":
+        command = [
+            provider["command"],
+            "-p",
+            "",
+            "-o",
+            "text",
+        ]
+        if model:
+            command.extend(["-m", model])
+        return command
+    return [provider["command"]]
+
+
+def execute_provider(provider_name: str, provider: dict[str, Any], prompt_path: Path, output_path: Path) -> dict[str, Any]:
+    command = provider_run_command(provider_name, provider, prompt_path, output_path)
+    prompt_text = prompt_path.read_text()
+
+    if provider_name == "gemini":
+        command[command.index("")] = prompt_text
+        result = shell(command)
+    else:
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            input=prompt_text,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    if provider_name == "gemini" and result.returncode == 0:
+        output_path.write_text(result.stdout)
+    return {
+        "provider": provider_name,
+        "command": command,
+        "returncode": result.returncode,
+        "stdout": truncate(result.stdout, 500),
+        "stderr": truncate(result.stderr, 500),
+        "output": str(output_path.relative_to(ROOT)),
+        "status": "passed" if result.returncode == 0 else "failed",
+    }
+
+
+def build_team_run_plan(spec: SpecPaths, agents: list[dict[str, Any]]) -> dict[str, Any]:
+    providers = orchestrator_providers()
+    health = {name: provider_health(name, payload) for name, payload in providers.items()}
+    plan_agents: list[dict[str, Any]] = []
+    for agent in agents:
+        prompt_path = spec.root / agent["output"]
+        planned_providers = []
+        for provider_name in agent.get("providers", []):
+            provider_state = health.get(provider_name, {"provider": provider_name, "available": False, "reason": "unknown"})
+            planned_providers.append(
+                {
+                    "provider": provider_name,
+                    "available": provider_state["available"],
+                    "reason": provider_state["reason"],
+                    "result_path": str((prompt_path.parent / f"{prompt_path.stem}.{provider_name}.result.md").relative_to(ROOT)),
+                }
+            )
+        plan_agents.append(
+            {
+                "name": agent["name"],
+                "stage": agent.get("stage", 0),
+                "prompt_path": str(prompt_path.relative_to(ROOT)),
+                "providers": planned_providers,
+            }
+        )
+    return {"providers": health, "agents": plan_agents}
+
+
+def run_team_plan(spec: SpecPaths, plan: dict[str, Any]) -> list[dict[str, Any]]:
+    providers = orchestrator_providers()
+    executions: list[dict[str, Any]] = []
+    stages = sorted({agent["stage"] for agent in plan["agents"]})
+    for stage in stages:
+        batch = [agent for agent in plan["agents"] if agent["stage"] == stage]
+        jobs = []
+        with ThreadPoolExecutor(max_workers=max(1, len(batch) * 2)) as executor:
+            for agent in batch:
+                prompt_path = ROOT / agent["prompt_path"]
+                for provider_state in agent["providers"]:
+                    if not provider_state["available"]:
+                        executions.append(
+                            {
+                                "agent": agent["name"],
+                                "provider": provider_state["provider"],
+                                "status": "skipped",
+                                "reason": provider_state["reason"],
+                                "output": provider_state["result_path"],
+                            }
+                        )
+                        continue
+                    output_path = ROOT / provider_state["result_path"]
+                    jobs.append(
+                        executor.submit(
+                            execute_provider,
+                            provider_state["provider"],
+                            providers[provider_state["provider"]],
+                            prompt_path,
+                            output_path,
+                        )
+                    )
+            for future in as_completed(jobs):
+                executions.append(future.result())
+    return executions
 
 
 def slugify(value: str) -> str:
@@ -1103,6 +1256,34 @@ def cmd_spec_team(args: argparse.Namespace) -> int:
     return 0 if signals["should_enable_team"] else 2
 
 
+def cmd_spec_run_team(args: argparse.Namespace) -> int:
+    spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
+    orchestrator = orchestrator_config().get("team", {})
+    agents = orchestrator.get("agents", [])
+    run_plan = build_team_run_plan(spec, agents)
+    run_plan_path = spec.root / "agent-results" / "run-plan.json"
+    run_plan_path.parent.mkdir(parents=True, exist_ok=True)
+    run_plan_path.write_text(json.dumps(run_plan, indent=2, ensure_ascii=False) + "\n")
+
+    executions: list[dict[str, Any]] = []
+    if args.execute:
+        executions = run_team_plan(spec, run_plan)
+
+    print_json(
+        {
+            "command": "spec-run-team",
+            "run_plan": str(run_plan_path.relative_to(ROOT)),
+            "providers": run_plan["providers"],
+            "agents": run_plan["agents"],
+            "executions": executions,
+        }
+    )
+    if args.execute:
+        failed = [item for item in executions if item.get("status") == "failed"]
+        return 1 if failed else 0
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="AI Harness command and hook runner")
     sub = root.add_subparsers(dest="command", required=True)
@@ -1187,6 +1368,13 @@ def parser() -> argparse.ArgumentParser:
     team.add_argument("--iteration", default="v1")
     team.add_argument("--force", action="store_true")
     team.set_defaults(func=cmd_spec_team)
+
+    run_team = sub.add_parser("spec-run-team", help="Build or execute provider run plan for agents team")
+    run_team.add_argument("--slug", required=True)
+    run_team.add_argument("--date")
+    run_team.add_argument("--iteration", default="v1")
+    run_team.add_argument("--execute", action="store_true")
+    run_team.set_defaults(func=cmd_spec_run_team)
 
     return root
 
