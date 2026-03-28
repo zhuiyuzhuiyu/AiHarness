@@ -8,11 +8,20 @@
 - `templates/`: 可复用的 spec 模板
 - `commands/`: 显式触发的工作流入口
 - `hooks/`: 自动执行的检查点和门禁
-- `docs/`: 工作流与配置说明
+- `docs/`: 长期知识、计划和记录系统
 
 ## 当前 Skill
 
 - `company-ai-harness`
+
+## Record System
+
+这个仓库现在采用“短入口 + 结构化 docs”的方式组织知识：
+
+- 仓库入口地图：[AGENTS.md](/Users/zyh/Desktop/AiHarness/AGENTS.md)
+- 文档索引：[docs/index.md](/Users/zyh/Desktop/AiHarness/docs/index.md)
+- 执行计划：[docs/exec-plans/index.md](/Users/zyh/Desktop/AiHarness/docs/exec-plans/index.md)
+- 设计原则：[docs/design-docs/index.md](/Users/zyh/Desktop/AiHarness/docs/design-docs/index.md)
 
 ## 工作流接口
 
