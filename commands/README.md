@@ -19,6 +19,7 @@
 - `commands/spec-start`
 - `commands/spec-execute`
 - `commands/spec-finish`
+- `commands/spec-archive-plan`
 
 所有命令包装脚本最终都会调用 `bin/aih`，再由 `scripts/harness.py` 执行。
 
@@ -39,6 +40,7 @@
 - `spec-close`
 - `spec-team`
 - `spec-run-team`
+- `spec-archive-plan`
 
 每个命令应说明：
 

@@ -18,6 +18,11 @@ TEMPLATES_DIR = ROOT / "templates"
 SPECS_DIR = ROOT / "specs"
 CONFIG_PATH = ROOT / ".aiharness" / "config.json"
 ORCHESTRATOR_PATH = ROOT / ".aiharness" / "orchestrator.json"
+EXEC_PLANS_DIR = ROOT / "docs" / "exec-plans"
+EXEC_PLANS_ACTIVE_DIR = EXEC_PLANS_DIR / "active"
+EXEC_PLANS_COMPLETED_DIR = EXEC_PLANS_DIR / "completed"
+EXECUTION_INDEX_JSON = EXEC_PLANS_DIR / "execution-index.json"
+EXECUTION_INDEX_MD = EXEC_PLANS_DIR / "execution-index.md"
 
 PROJECT_DOC_CANDIDATES = [
     ".docs/ARCHITECTURE.md",
@@ -491,6 +496,13 @@ def ensure_file(path: Path, content: str) -> None:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
+
+
+def move_path(src: Path, dest: Path) -> None:
+    if not src.exists():
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src.replace(dest)
 
 
 def load_template(name: str) -> str:
@@ -1022,6 +1034,78 @@ def build_stamp(explicit_date: str | None, iteration: str) -> str:
     return f"{base}-{iteration}"
 
 
+def exec_plan_name(slug: str, stamp: str) -> str:
+    return f"{slug}-{stamp}.md"
+
+
+def active_exec_plan_path(slug: str, stamp: str) -> Path:
+    return EXEC_PLANS_ACTIVE_DIR / exec_plan_name(slug, stamp)
+
+
+def completed_exec_plan_path(slug: str, stamp: str) -> Path:
+    return EXEC_PLANS_COMPLETED_DIR / exec_plan_name(slug, stamp)
+
+
+def execution_index_payload() -> list[dict[str, Any]]:
+    if not EXECUTION_INDEX_JSON.exists():
+        return []
+    try:
+        return json.loads(EXECUTION_INDEX_JSON.read_text())
+    except json.JSONDecodeError:
+        return []
+
+
+def write_execution_index(entries: list[dict[str, Any]]) -> None:
+    EXECUTION_INDEX_JSON.parent.mkdir(parents=True, exist_ok=True)
+    EXECUTION_INDEX_JSON.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n")
+
+    lines = [
+        "# Execution Index",
+        "",
+        "| 日期 | 命令 | slug | stamp | 状态 | 备注 |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for item in entries[-100:]:
+        lines.append(
+            f"| {item['date']} | `{item['command']}` | `{item['slug']}` | `{item['stamp']}` | `{item['status']}` | {item.get('note', '')} |"
+        )
+    EXECUTION_INDEX_MD.write_text("\n".join(lines) + "\n")
+
+
+def record_execution_event(command: str, slug: str, stamp: str, status: str, note: str = "") -> None:
+    entries = execution_index_payload()
+    entries.append(
+        {
+            "date": date.today().isoformat(),
+            "command": command,
+            "slug": slug,
+            "stamp": stamp,
+            "status": status,
+            "note": note,
+        }
+    )
+    write_execution_index(entries)
+
+
+def exec_plan_content(spec: SpecPaths, signals: dict[str, Any], status: str) -> str:
+    return (
+        "# Execution Plan\n\n"
+        f"## slug\n\n- `{spec.root.parent.name}`\n\n"
+        f"## stamp\n\n- `{spec.root.name}`\n\n"
+        f"## status\n\n- `{status}`\n\n"
+        "## links\n\n"
+        f"- requirements: `{spec.requirements.relative_to(ROOT)}`\n"
+        f"- design: `{spec.design.relative_to(ROOT)}`\n"
+        f"- tasks: `{spec.tasks.relative_to(ROOT)}`\n"
+        f"- orchestration: `{(spec.root / 'orchestration.md').relative_to(ROOT)}`\n\n"
+        "## signals\n\n"
+        f"- 风险类别：{', '.join(signals['risk_categories']) or '无'}\n"
+        f"- 子系统：{', '.join(signals['subsystems']) or '无'}\n"
+        f"- 任务数：{signals['task_count']}\n"
+        f"- 是否启用 team：{'是' if signals['should_enable_team'] else '否'}\n"
+    )
+
+
 def run_or_fail(func, args: argparse.Namespace) -> dict[str, Any]:
     code = func(args)
     if code not in (0, 2):
@@ -1252,6 +1336,10 @@ def cmd_spec_team(args: argparse.Namespace) -> int:
         write_text(output_path, agent_prompt_content(spec, agent, signals), force=args.force)
         generated_outputs.append(str(output_path.relative_to(ROOT)))
 
+    exec_plan_path = active_exec_plan_path(spec.root.parent.name, spec.root.name)
+    write_text(exec_plan_path, exec_plan_content(spec, signals, "active"), force=True)
+    generated_outputs.append(str(exec_plan_path.relative_to(ROOT)))
+
     print_json(
         {
             "command": "spec-team",
@@ -1287,7 +1375,9 @@ def cmd_spec_run_team(args: argparse.Namespace) -> int:
     )
     if args.execute:
         failed = [item for item in executions if item.get("status") == "failed"]
+        record_execution_event("spec-run-team", spec.root.parent.name, spec.root.name, "failed" if failed else "passed", "provider run")
         return 1 if failed else 0
+    record_execution_event("spec-run-team", spec.root.parent.name, spec.root.name, "planned", "provider run plan generated")
     return 0
 
 
@@ -1328,6 +1418,7 @@ def cmd_spec_start(args: argparse.Namespace) -> int:
             "steps": steps,
         }
     )
+    record_execution_event("spec-start", slug, stamp, "completed", "需求接入与计划初始化")
     return 0
 
 
@@ -1368,13 +1459,20 @@ def cmd_spec_execute(args: argparse.Namespace) -> int:
             "steps": steps,
         }
     )
+    status = "failed" if review_exit == 1 or verify_exit == 1 else "completed"
+    note = "执行阶段完成" if status == "completed" else "review 或 verify 存在阻塞问题"
+    record_execution_event("spec-execute", spec.root.parent.name, spec.root.name, status, note)
     return 1 if review_exit == 1 or verify_exit == 1 else 0
 
 
 def cmd_spec_finish(args: argparse.Namespace) -> int:
     common = argparse.Namespace(slug=args.slug, date=args.date, iteration=args.iteration)
+    spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
     pre_close_exit = cmd_hook_pre_close(common)
     close_exit = cmd_spec_close(common)
+    active_plan = active_exec_plan_path(spec.root.parent.name, spec.root.name)
+    completed_plan = completed_exec_plan_path(spec.root.parent.name, spec.root.name)
+    move_path(active_plan, completed_plan)
     print_json(
         {
             "command": "spec-finish",
@@ -1383,9 +1481,28 @@ def cmd_spec_finish(args: argparse.Namespace) -> int:
                 {"step": "cmd_hook_pre_close", "exit_code": pre_close_exit},
                 {"step": "cmd_spec_close", "exit_code": close_exit},
             ],
+            "archived_plan": str(completed_plan.relative_to(ROOT)) if completed_plan.exists() else "",
         }
     )
+    record_execution_event("spec-finish", spec.root.parent.name, spec.root.name, "completed", "交付收尾并归档计划")
     return 0 if close_exit == 0 else close_exit
+
+
+def cmd_spec_archive_plan(args: argparse.Namespace) -> int:
+    spec = spec_dir(slugify(args.slug), build_stamp(args.date, args.iteration))
+    active_plan = active_exec_plan_path(spec.root.parent.name, spec.root.name)
+    completed_plan = completed_exec_plan_path(spec.root.parent.name, spec.root.name)
+    move_path(active_plan, completed_plan)
+    print_json(
+        {
+            "command": "spec-archive-plan",
+            "slug": spec.root.parent.name,
+            "stamp": spec.root.name,
+            "archived_plan": str(completed_plan.relative_to(ROOT)) if completed_plan.exists() else "",
+        }
+    )
+    record_execution_event("spec-archive-plan", spec.root.parent.name, spec.root.name, "completed", "手动归档执行计划")
+    return 0 if completed_plan.exists() else 1
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1503,6 +1620,12 @@ def parser() -> argparse.ArgumentParser:
     finish.add_argument("--date")
     finish.add_argument("--iteration", default="v1")
     finish.set_defaults(func=cmd_spec_finish)
+
+    archive = sub.add_parser("spec-archive-plan", help="Archive an active execution plan into completed")
+    archive.add_argument("--slug", required=True)
+    archive.add_argument("--date")
+    archive.add_argument("--iteration", default="v1")
+    archive.set_defaults(func=cmd_spec_archive_plan)
 
     return root
 

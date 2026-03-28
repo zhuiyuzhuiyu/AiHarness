@@ -81,6 +81,20 @@
 
 当前版本会先做 provider 健康检查，不可用或未认证的 provider 会自动跳过。
 
+## 执行计划与索引
+
+- `spec-team` 会自动在 `docs/exec-plans/active/` 下生成执行计划
+- `spec-finish` 会自动把对应计划归档到 `docs/exec-plans/completed/`
+- `spec-start`、`spec-execute`、`spec-run-team`、`spec-finish` 会自动更新：
+  - `docs/exec-plans/execution-index.json`
+  - `docs/exec-plans/execution-index.md`
+
+如果需要单独归档，也可以运行：
+
+```bash
+./commands/spec-archive-plan --slug feature-slug
+```
+
 ## Codex 接入
 
 将 Codex 指向这个仓库中的 skill：
